@@ -1,7 +1,4 @@
-using System.Reflection;
-using System.Threading.Tasks;
-using cosmosofflinewithLCC.Data;
-using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 namespace cosmosofflinewithLCC.Sync
 {
@@ -13,6 +10,12 @@ namespace cosmosofflinewithLCC.Sync
             var lastModifiedProp = typeof(T).GetProperty("LastModified") ?? throw new System.Exception("Model must have LastModified property");
 
             logger.LogInformation("Starting sync process for type {Type}", typeof(T).Name);
+
+            // Metrics
+            int itemsPushed = 0;
+            int itemsPulled = 0;
+            int itemsSkipped = 0;
+            var stopwatch = Stopwatch.StartNew();
 
             try
             {
@@ -31,11 +34,17 @@ namespace cosmosofflinewithLCC.Sync
                     {
                         logger.LogInformation("Pushing new item with Id {Id} to remote", id);
                         await remote.UpsertAsync(localChange);
+                        itemsPushed++;
                     }
                     else if (localLast.HasValue && remoteLast.HasValue && localLast > remoteLast)
                     {
                         logger.LogInformation("Updating item with Id {Id} on remote as local is newer", id);
                         await remote.UpsertAsync(localChange);
+                        itemsPushed++;
+                    }
+                    else
+                    {
+                        itemsSkipped++;
                     }
 
                     if (id != null)
@@ -62,15 +71,23 @@ namespace cosmosofflinewithLCC.Sync
                     {
                         logger.LogInformation("Pulling new item with Id {Id} to local", id);
                         await local.UpsertAsync(remoteItem);
+                        itemsPulled++;
                     }
                     else if (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast)
                     {
                         logger.LogInformation("Updating item with Id {Id} on local as remote is newer", id);
                         await local.UpsertAsync(remoteItem);
+                        itemsPulled++;
+                    }
+                    else
+                    {
+                        itemsSkipped++;
                     }
                 }
 
-                logger.LogInformation("Sync process completed successfully for type {Type}", typeof(T).Name);
+                stopwatch.Stop();
+                logger.LogInformation("Sync process completed successfully for type {Type} in {ElapsedMilliseconds} ms", typeof(T).Name, stopwatch.ElapsedMilliseconds);
+                logger.LogInformation("Metrics: {ItemsPushed} items pushed, {ItemsPulled} items pulled, {ItemsSkipped} items skipped", itemsPushed, itemsPulled, itemsSkipped);
             }
             catch (Exception ex)
             {
