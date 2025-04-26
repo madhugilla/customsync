@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using cosmosofflinewithLCC.Data;
 using Microsoft.Extensions.Logging;
 
@@ -46,6 +47,9 @@ namespace cosmosofflinewithLCC.Sync
             var pending = await local.GetPendingChangesAsync();
             logger.LogInformation("Found {Count} pending changes to push to remote", pending.Count);
 
+            var itemsToUpsert = new List<T>();
+            var idsToRemove = new List<string>();
+
             foreach (var localChange in pending)
             {
                 var id = idProp.GetValue(localChange)?.ToString();
@@ -55,9 +59,8 @@ namespace cosmosofflinewithLCC.Sync
 
                 if (remoteItem == null || (localLast.HasValue && remoteLast.HasValue && localLast > remoteLast))
                 {
-                    logger.LogInformation(remoteItem == null ? "Pushing new item with Id {Id} to remote" : "Updating item with Id {Id} on remote as local is newer", id);
-                    await remote.UpsertAsync(localChange);
-                    itemsPushed++;
+                    logger.LogInformation(remoteItem == null ? "Preparing new item with Id {Id} for remote" : "Preparing update for item with Id {Id} on remote as local is newer", id);
+                    itemsToUpsert.Add(localChange);
                 }
                 else
                 {
@@ -66,9 +69,22 @@ namespace cosmosofflinewithLCC.Sync
 
                 if (id != null)
                 {
-                    logger.LogInformation("Removing pending change for Id {Id}", id);
-                    await local.RemovePendingChangeAsync(id);
+                    idsToRemove.Add(id);
                 }
+            }
+
+            if (itemsToUpsert.Any())
+            {
+                foreach (var item in itemsToUpsert)
+                {
+                    await remote.UpsertAsync(item);
+                }
+                itemsPushed += itemsToUpsert.Count;
+            }
+
+            foreach (var id in idsToRemove)
+            {
+                await local.RemovePendingChangeAsync(id);
             }
 
             return itemsPushed;
@@ -79,6 +95,8 @@ namespace cosmosofflinewithLCC.Sync
             int itemsPulled = 0;
             var remoteItems = await remote.GetAllAsync();
             logger.LogInformation("Found {Count} items on remote to sync to local", remoteItems.Count);
+
+            var itemsToUpsert = new List<T>();
 
             foreach (var remoteItem in remoteItems)
             {
@@ -91,14 +109,22 @@ namespace cosmosofflinewithLCC.Sync
 
                 if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
                 {
-                    logger.LogInformation(localItem == null ? "Pulling new item with Id {Id} to local" : "Updating item with Id {Id} on local as remote is newer", id);
-                    await local.UpsertAsync(remoteItem);
-                    itemsPulled++;
+                    logger.LogInformation(localItem == null ? "Preparing new item with Id {Id} for local" : "Preparing update for item with Id {Id} on local as remote is newer", id);
+                    itemsToUpsert.Add(remoteItem);
                 }
                 else
                 {
                     logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
                 }
+            }
+
+            if (itemsToUpsert.Any())
+            {
+                foreach (var item in itemsToUpsert)
+                {
+                    await local.UpsertAsync(item);
+                }
+                itemsPulled += itemsToUpsert.Count;
             }
 
             return itemsPulled;
