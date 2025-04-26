@@ -1,58 +1,81 @@
 using System.Reflection;
 using System.Threading.Tasks;
 using cosmosofflinewithLCC.Data;
+using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.Sync
 {
-    // Generic sync logic with Last Write Wins (async)
     public static class SyncEngine
     {
-        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote) where T : class, new()
+        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger) where T : class, new()
         {
             var idProp = typeof(T).GetProperty("Id") ?? throw new System.Exception("Model must have Id property");
             var lastModifiedProp = typeof(T).GetProperty("LastModified") ?? throw new System.Exception("Model must have LastModified property");
 
-            // 1. Push local pending changes to remote
-            var pending = await local.GetPendingChangesAsync();
-            foreach (var localChange in pending)
-            {
-                var id = idProp.GetValue(localChange)?.ToString();
-                var remoteItem = id != null ? await remote.GetAsync(id) : null;
-                var localLast = lastModifiedProp.GetValue(localChange) as System.DateTime?;
-                var remoteLast = remoteItem != null ? lastModifiedProp.GetValue(remoteItem) as System.DateTime? : null;
+            logger.LogInformation("Starting sync process for type {Type}", typeof(T).Name);
 
-                if (remoteItem == null)
+            try
+            {
+                // 1. Push local pending changes to remote
+                var pending = await local.GetPendingChangesAsync();
+                logger.LogInformation("Found {Count} pending changes to push to remote", pending.Count);
+
+                foreach (var localChange in pending)
                 {
-                    await remote.UpsertAsync(localChange);
+                    var id = idProp.GetValue(localChange)?.ToString();
+                    var remoteItem = id != null ? await remote.GetAsync(id) : null;
+                    var localLast = lastModifiedProp.GetValue(localChange) as System.DateTime?;
+                    var remoteLast = remoteItem != null ? lastModifiedProp.GetValue(remoteItem) as System.DateTime? : null;
+
+                    if (remoteItem == null)
+                    {
+                        logger.LogInformation("Pushing new item with Id {Id} to remote", id);
+                        await remote.UpsertAsync(localChange);
+                    }
+                    else if (localLast.HasValue && remoteLast.HasValue && localLast > remoteLast)
+                    {
+                        logger.LogInformation("Updating item with Id {Id} on remote as local is newer", id);
+                        await remote.UpsertAsync(localChange);
+                    }
+
+                    if (id != null)
+                    {
+                        logger.LogInformation("Removing pending change for Id {Id}", id);
+                        await local.RemovePendingChangeAsync(id);
+                    }
                 }
-                else if (localLast.HasValue && remoteLast.HasValue && localLast > remoteLast)
+
+                // 2. Pull remote changes to local
+                var remoteItems = await remote.GetAllAsync();
+                logger.LogInformation("Found {Count} items on remote to sync to local", remoteItems.Count);
+
+                foreach (var remoteItem in remoteItems)
                 {
-                    await remote.UpsertAsync(localChange);
+                    if (remoteItem == null) continue;
+
+                    var id = idProp.GetValue(remoteItem)?.ToString();
+                    var localItem = id != null ? await local.GetAsync(id) : null;
+                    var remoteLast = lastModifiedProp.GetValue(remoteItem) as System.DateTime?;
+                    var localLast = localItem != null ? lastModifiedProp.GetValue(localItem) as System.DateTime? : null;
+
+                    if (localItem == null)
+                    {
+                        logger.LogInformation("Pulling new item with Id {Id} to local", id);
+                        await local.UpsertAsync(remoteItem);
+                    }
+                    else if (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast)
+                    {
+                        logger.LogInformation("Updating item with Id {Id} on local as remote is newer", id);
+                        await local.UpsertAsync(remoteItem);
+                    }
                 }
-                // Always remove the pending change after processing
-                if (id != null)
-                    await local.RemovePendingChangeAsync(id);
+
+                logger.LogInformation("Sync process completed successfully for type {Type}", typeof(T).Name);
             }
-
-            // 2. Pull remote changes to local
-            var remoteItems = await remote.GetAllAsync();
-            foreach (var remoteItem in remoteItems)
+            catch (Exception ex)
             {
-                if (remoteItem == null) continue; // Skip null remote items
-
-                var id = idProp.GetValue(remoteItem)?.ToString();
-                var localItem = id != null ? await local.GetAsync(id) : null;
-                var remoteLast = lastModifiedProp.GetValue(remoteItem) as System.DateTime?;
-                var localLast = localItem != null ? lastModifiedProp.GetValue(localItem) as System.DateTime? : null;
-
-                if (localItem == null)
-                {
-                    await local.UpsertAsync(remoteItem);
-                }
-                else if (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast)
-                {
-                    await local.UpsertAsync(remoteItem);
-                }
+                logger.LogError(ex, "An error occurred during the sync process for type {Type}", typeof(T).Name);
+                throw;
             }
         }
     }

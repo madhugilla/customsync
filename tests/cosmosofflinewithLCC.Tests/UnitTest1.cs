@@ -2,11 +2,14 @@
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
+using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.Tests
 {
     public class SyncEngineTests
     {
+        private readonly Mock<ILogger> _loggerMock = new Mock<ILogger>();
+
         [Fact]
         public async Task SyncAsync_PushesLocalPendingChangeToRemote_WhenRemoteDoesNotHaveItem()
         {
@@ -17,14 +20,16 @@ namespace cosmosofflinewithLCC.Tests
             var pendingItem = new Item { Id = "1", Content = "A", LastModified = now };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
             remoteMock.Setup(x => x.GetAsync("1")).ReturnsAsync((Item?)null);
-            remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { pendingItem }); // Mock setup for GetAllAsync to return the pending item
+            remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { pendingItem });
+
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+
             // Assert
             remoteMock.Verify(x => x.UpsertAsync(It.Is<Item>(i => i.Id == pendingItem.Id && i.Content == pendingItem.Content && i.LastModified == now)), Times.Once);
             localMock.Verify(x => x.RemovePendingChangeAsync("1"), Times.Once);
-            localMock.Verify(x => x.GetPendingChangesAsync(), Times.Once); // Verify GetPendingChangesAsync is called
-            remoteMock.Verify(x => x.GetAsync("1"), Times.Once); // Verify GetAsync is called
+            localMock.Verify(x => x.GetPendingChangesAsync(), Times.Once);
+            remoteMock.Verify(x => x.GetAsync("1"), Times.Once);
         }
 
         [Fact]
@@ -38,11 +43,10 @@ namespace cosmosofflinewithLCC.Tests
             var remoteItem = new Item { Id = "2", Content = "Old", LastModified = now.AddMinutes(-1) };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
             remoteMock.Setup(x => x.GetAsync("2")).ReturnsAsync(remoteItem);
-            // Add this line to prevent the pull logic from affecting the test
-            remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item>());
+            remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item>()); // Prevent the pull logic from affecting the test
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
 
             // Assert
             remoteMock.Verify(x => x.UpsertAsync(It.Is<Item>(i =>
@@ -65,12 +69,11 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
             remoteMock.Setup(x => x.GetAsync("3")).ReturnsAsync(remoteItem);
 
-            // Dynamically update GetAllAsync to include the remote item
             var remoteItems = new List<Item> { remoteItem };
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(remoteItems);
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
 
             // Assert
             remoteMock.Verify(x => x.UpsertAsync(It.IsAny<Item>()), Times.Never);
@@ -90,7 +93,7 @@ namespace cosmosofflinewithLCC.Tests
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { remoteItem });
             localMock.Setup(x => x.GetAsync("4")).ReturnsAsync(localItem);
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
             // Assert
             localMock.Verify(x => x.UpsertAsync(It.Is<Item>(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now)), Times.Once);
         }
@@ -107,7 +110,7 @@ namespace cosmosofflinewithLCC.Tests
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { remoteItem });
             localMock.Setup(x => x.GetAsync("5")).ReturnsAsync((Item?)null);
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
             // Assert
             localMock.Verify(x => x.UpsertAsync(It.Is<Item>(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now)), Times.Once);
         }
@@ -125,7 +128,7 @@ namespace cosmosofflinewithLCC.Tests
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { remoteItem });
             localMock.Setup(x => x.GetAsync("6")).ReturnsAsync(localItem);
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
             // Assert
             localMock.Verify(x => x.UpsertAsync(It.IsAny<Item>()), Times.Never);
         }
