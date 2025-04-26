@@ -45,5 +45,23 @@ namespace cosmosofflinewithLCC.Data
         }
         public Task<List<T>> GetPendingChangesAsync() => Task.FromResult(new List<T>()); // Not used for remote
         public Task RemovePendingChangeAsync(string id) => Task.CompletedTask; // Not used for remote
+
+        public async Task UpsertBulkAsync(IEnumerable<T> documents)
+        {
+            var partitionKey = new PartitionKey(string.Empty); // Assuming all items share the same partition key
+            var batch = _container.CreateTransactionalBatch(partitionKey);
+
+            foreach (var document in documents)
+            {
+                batch.UpsertItem(document);
+            }
+
+            var response = await batch.ExecuteAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception($"Bulk upsert failed with status code {response.StatusCode}");
+            }
+        }
     }
 }

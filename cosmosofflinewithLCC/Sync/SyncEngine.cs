@@ -75,10 +75,7 @@ namespace cosmosofflinewithLCC.Sync
 
             if (itemsToUpsert.Any())
             {
-                foreach (var item in itemsToUpsert)
-                {
-                    await remote.UpsertAsync(item);
-                }
+                await remote.UpsertBulkAsync(itemsToUpsert);
                 itemsPushed += itemsToUpsert.Count;
             }
 
@@ -120,10 +117,7 @@ namespace cosmosofflinewithLCC.Sync
 
             if (itemsToUpsert.Any())
             {
-                foreach (var item in itemsToUpsert)
-                {
-                    await local.UpsertAsync(item);
-                }
+                await local.UpsertBulkAsync(itemsToUpsert);
                 itemsPulled += itemsToUpsert.Count;
             }
 

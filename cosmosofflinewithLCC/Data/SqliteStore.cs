@@ -55,6 +55,30 @@ namespace cosmosofflinewithLCC.Data
             cmd.Parameters.AddWithValue("@lastModified", lastModified);
             await cmd.ExecuteNonQueryAsync();
         }
+        public async Task UpsertBulkAsync(IEnumerable<T> documents)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
+
+            foreach (var document in documents)
+            {
+                var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
+                var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
+                var json = System.Text.Json.JsonSerializer.Serialize(document);
+
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified) VALUES (@id, @content, @lastModified) 
+                                    ON CONFLICT(Id) DO UPDATE SET Content = @content, LastModified = @lastModified; 
+                                    INSERT OR IGNORE INTO PendingChanges_{_tableName} (Id) VALUES (@id);";
+                cmd.Parameters.AddWithValue("@id", id);
+                cmd.Parameters.AddWithValue("@content", json);
+                cmd.Parameters.AddWithValue("@lastModified", lastModified);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            await transaction.CommitAsync();
+        }
         public async Task<List<T>> GetAllAsync()
         {
             var items = new List<T>();

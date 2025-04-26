@@ -26,7 +26,7 @@ namespace cosmosofflinewithLCC.Tests
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
 
             // Assert
-            remoteMock.Verify(x => x.UpsertAsync(It.Is<Item>(i => i.Id == pendingItem.Id && i.Content == pendingItem.Content && i.LastModified == now)), Times.Once);
+            remoteMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == pendingItem.Id && i.Content == pendingItem.Content && i.LastModified == now))), Times.Once);
             localMock.Verify(x => x.RemovePendingChangeAsync("1"), Times.Once);
             localMock.Verify(x => x.GetPendingChangesAsync(), Times.Once);
             remoteMock.Verify(x => x.GetAsync("1"), Times.Once);
@@ -49,11 +49,7 @@ namespace cosmosofflinewithLCC.Tests
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
 
             // Assert
-            remoteMock.Verify(x => x.UpsertAsync(It.Is<Item>(i =>
-                i.Id == pendingItem.Id &&
-                i.Content == pendingItem.Content &&
-                i.LastModified == now)), Times.Once);
-
+            remoteMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == pendingItem.Id && i.Content == pendingItem.Content && i.LastModified == now))), Times.Once);
             localMock.Verify(x => x.RemovePendingChangeAsync("2"), Times.Once);
         }
 
@@ -76,7 +72,7 @@ namespace cosmosofflinewithLCC.Tests
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
 
             // Assert
-            remoteMock.Verify(x => x.UpsertAsync(It.IsAny<Item>()), Times.Never);
+            remoteMock.Verify(x => x.UpsertBulkAsync(It.IsAny<IEnumerable<Item>>()), Times.Never);
             localMock.Verify(x => x.RemovePendingChangeAsync("3"), Times.Once);
         }
 
@@ -92,10 +88,12 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { remoteItem });
             localMock.Setup(x => x.GetAsync("4")).ReturnsAsync(localItem);
+
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+
             // Assert
-            localMock.Verify(x => x.UpsertAsync(It.Is<Item>(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now)), Times.Once);
+            localMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now))), Times.Once);
         }
 
         [Fact]
@@ -109,10 +107,12 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { remoteItem });
             localMock.Setup(x => x.GetAsync("5")).ReturnsAsync((Item?)null);
+
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+
             // Assert
-            localMock.Verify(x => x.UpsertAsync(It.Is<Item>(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now)), Times.Once);
+            localMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now))), Times.Once);
         }
 
         [Fact]
@@ -127,10 +127,12 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { remoteItem });
             localMock.Setup(x => x.GetAsync("6")).ReturnsAsync(localItem);
+
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+
             // Assert
-            localMock.Verify(x => x.UpsertAsync(It.IsAny<Item>()), Times.Never);
+            localMock.Verify(x => x.UpsertBulkAsync(It.IsAny<IEnumerable<Item>>()), Times.Never);
         }
     }
 }

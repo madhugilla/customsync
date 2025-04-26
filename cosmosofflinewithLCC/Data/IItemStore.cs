@@ -7,6 +7,7 @@ namespace cosmosofflinewithLCC.Data
     {
         Task<T?> GetAsync(string id);
         Task UpsertAsync(T document);
+        Task UpsertBulkAsync(IEnumerable<T> documents);
         Task<List<T>> GetAllAsync();
         Task<List<T>> GetPendingChangesAsync(); // For local store
         Task RemovePendingChangeAsync(string id);  // For local store
