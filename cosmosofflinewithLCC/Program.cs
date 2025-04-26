@@ -5,6 +5,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Threading.Tasks;
 
@@ -40,6 +41,9 @@ namespace cosmosofflinewithLCC
                         var sqlite = new SqliteStore<Item>(sqlitePath);
                         return sqlite;
                     });
+
+                    // Register logging
+                    services.AddLogging();
                     services.AddSingleton<CosmosDbStore<Item>>(provider =>
                     {
                         var container = provider.GetRequiredService<Task<Container>>().GetAwaiter().GetResult();
@@ -62,10 +66,11 @@ namespace cosmosofflinewithLCC
 
             // Simulate remote change (conflict) for Item
             var remoteItem = new Item { Id = "1", Content = "Remote version", LastModified = DateTime.UtcNow.AddSeconds(-10) };
-            await remoteStore.UpsertAsync(remoteItem);
+            var logger = host.Services.GetRequiredService<ILogger<Program>>();
+            await SyncEngine.SyncAsync(localStore, remoteStore, logger);
 
             // Sync for Item
-            await SyncEngine.SyncAsync(localStore, remoteStore);
+            await SyncEngine.SyncAsync(localStore, remoteStore, logger);
 
             // Result for Item
             var syncedRemote = await remoteStore.GetAsync("1");
