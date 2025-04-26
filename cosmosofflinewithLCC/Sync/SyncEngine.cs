@@ -6,6 +6,9 @@ using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.Sync
 {
+    /// <summary>
+    /// TODO: implement soft deletes
+    /// </summary>
     public static class SyncEngine
     {
         private static string GetPropertyName<T, TProperty>(Expression<Func<T, TProperty>> propertyExpression)
@@ -14,7 +17,13 @@ namespace cosmosofflinewithLCC.Sync
             {
                 return memberExpression.Member.Name;
             }
-            throw new ArgumentException("Invalid property expression");
+            else if (propertyExpression.Body is UnaryExpression unaryExpression && unaryExpression.Operand is MemberExpression unaryMemberExpression)
+            {
+                // Handle cases where the expression is wrapped in a Convert or similar unary operation
+                return unaryMemberExpression.Member.Name;
+            }
+
+            throw new ArgumentException("Invalid property expression. Ensure the expression is a simple property access, e.g., x => x.PropertyName.");
         }
 
         public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression) where T : class, new()

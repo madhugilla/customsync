@@ -1,6 +1,4 @@
 using Microsoft.Azure.Cosmos;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using System.Reflection;
 
 namespace cosmosofflinewithLCC.Data
@@ -48,19 +46,33 @@ namespace cosmosofflinewithLCC.Data
 
         public async Task UpsertBulkAsync(IEnumerable<T> documents)
         {
-            var partitionKey = new PartitionKey(string.Empty); // Assuming all items share the same partition key
-            var batch = _container.CreateTransactionalBatch(partitionKey);
-
-            foreach (var document in documents)
+            var partitionKeyProperty = typeof(T).GetProperty("Id"); // Replace with your partition key property name
+            if (partitionKeyProperty == null)
             {
-                batch.UpsertItem(document);
+                throw new Exception("PartitionKey property is required for bulk upsert");
             }
 
-            var response = await batch.ExecuteAsync();
+            var groupedByPartitionKey = documents
+                .GroupBy(doc => partitionKeyProperty.GetValue(doc)?.ToString() ?? string.Empty);
 
-            if (!response.IsSuccessStatusCode)
+            foreach (var group in groupedByPartitionKey)
             {
-                throw new Exception($"Bulk upsert failed with status code {response.StatusCode}");
+                var partitionKey = new PartitionKey(group.Key);
+                var batch = _container.CreateTransactionalBatch(partitionKey);
+
+                foreach (var document in group)
+                {
+                    var id = partitionKeyProperty.GetValue(document)?.ToString();
+                    Console.WriteLine($"Upserting document with ID: {id} in partition: {group.Key}");
+                    batch.UpsertItem(document);
+                }
+
+                var response = await batch.ExecuteAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Bulk upsert failed for partition key {group.Key} with status code {response.StatusCode}");
+                }
             }
         }
     }
