@@ -67,10 +67,10 @@ namespace cosmosofflinewithLCC
             // Simulate remote change (conflict) for Item
             var remoteItem = new Item { Id = "1", Content = "Remote version", LastModified = DateTime.UtcNow.AddSeconds(-10) };
             var logger = host.Services.GetRequiredService<ILogger<Program>>();
-            await SyncEngine.SyncAsync(localStore, remoteStore, logger);
+            await SyncEngine.SyncAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified);
 
             // Sync for Item
-            await SyncEngine.SyncAsync(localStore, remoteStore, logger);
+            await SyncEngine.SyncAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified);
 
             // Result for Item
             var syncedRemote = await remoteStore.GetAsync("1");
