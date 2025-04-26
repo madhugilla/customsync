@@ -12,20 +12,17 @@ namespace cosmosofflinewithLCC.Sync
             var lastModifiedProp = GetProperty(typeof(T), "LastModified");
 
             logger.LogInformation("Starting sync process for type {Type}", typeof(T).Name);
-
-            // Metrics
-            int itemsPushed = 0;
-            int itemsPulled = 0;
             int itemsSkipped = 0;
             var stopwatch = Stopwatch.StartNew();
 
             try
             {
+                // Metrics
                 // Push local pending changes to remote
-                itemsPushed = await PushPendingChanges(local, remote, logger, idProp, lastModifiedProp);
+                int itemsPushed = await PushPendingChanges(local, remote, logger, idProp, lastModifiedProp);
 
                 // Pull remote changes to local
-                itemsPulled = await PullRemoteChanges(local, remote, logger, idProp, lastModifiedProp);
+                int itemsPulled = await PullRemoteChanges(local, remote, logger, idProp, lastModifiedProp);
 
                 stopwatch.Stop();
                 logger.LogInformation("Sync process completed successfully for type {Type} in {ElapsedMilliseconds} ms", typeof(T).Name, stopwatch.ElapsedMilliseconds);
