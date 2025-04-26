@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.Tests
 {
-    public class SyncEngineTests
+    public class SyncEngineUnitTests
     {
         private readonly Mock<ILogger> _loggerMock = new Mock<ILogger>();
 
