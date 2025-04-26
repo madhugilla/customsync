@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using cosmosofflinewithLCC.Data;
+using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.Sync
 {
