@@ -9,6 +9,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "cosmosofflinewithLCC.Tests", "tests\cosmosofflinewithLCC.Tests\cosmosofflinewithLCC.Tests.csproj", "{7E322396-8BE1-4BBB-AF67-13E5E5527D93}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "cosmosofflinewithLCC.IntegrationTests", "tests\cosmosofflinewithLCC.IntegrationTests\cosmosofflinewithLCC.IntegrationTests.csproj", "{9C597D42-221F-4C98-B382-075FC8009AF5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,12 +45,25 @@ Global
 		{7E322396-8BE1-4BBB-AF67-13E5E5527D93}.Release|x64.Build.0 = Release|Any CPU
 		{7E322396-8BE1-4BBB-AF67-13E5E5527D93}.Release|x86.ActiveCfg = Release|Any CPU
 		{7E322396-8BE1-4BBB-AF67-13E5E5527D93}.Release|x86.Build.0 = Release|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Debug|x64.Build.0 = Debug|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Debug|x86.Build.0 = Debug|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Release|x64.ActiveCfg = Release|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Release|x64.Build.0 = Release|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Release|x86.ActiveCfg = Release|Any CPU
+		{9C597D42-221F-4C98-B382-075FC8009AF5}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{7E322396-8BE1-4BBB-AF67-13E5E5527D93} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{9C597D42-221F-4C98-B382-075FC8009AF5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {D842E969-34D0-4E4B-BBAF-723009D15377}
