@@ -1,0 +1,26 @@
+# Ignore build output and dependencies
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.cache
+*.nuget
+*.trx
+*.log
+*.user
+*.vs
+*.vscode
+
+# Ignore test results
+TestResults/
+
+# Ignore IDE-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Ignore other system files
+.DS_Store
+Thumbs.db
