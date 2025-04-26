@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Linq;
 using cosmosofflinewithLCC.Data;
 using Microsoft.Extensions.Logging;
@@ -7,10 +8,19 @@ namespace cosmosofflinewithLCC.Sync
 {
     public static class SyncEngine
     {
-        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger) where T : class, new()
+        private static string GetPropertyName<T, TProperty>(Expression<Func<T, TProperty>> propertyExpression)
         {
-            var idProp = GetProperty(typeof(T), "Id");
-            var lastModifiedProp = GetProperty(typeof(T), "LastModified");
+            if (propertyExpression.Body is MemberExpression memberExpression)
+            {
+                return memberExpression.Member.Name;
+            }
+            throw new ArgumentException("Invalid property expression");
+        }
+
+        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression) where T : class, new()
+        {
+            var idPropName = GetPropertyName(idExpression);
+            var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
 
             logger.LogInformation("Starting sync process for type {Type}", typeof(T).Name);
             int itemsSkipped = 0;
@@ -20,10 +30,10 @@ namespace cosmosofflinewithLCC.Sync
             {
                 // Metrics
                 // Push local pending changes to remote
-                int itemsPushed = await PushPendingChanges(local, remote, logger, idProp, lastModifiedProp);
+                int itemsPushed = await PushPendingChanges(local, remote, logger, idPropName, lastModifiedPropName);
 
                 // Pull remote changes to local
-                int itemsPulled = await PullRemoteChanges(local, remote, logger, idProp, lastModifiedProp);
+                int itemsPulled = await PullRemoteChanges(local, remote, logger, idPropName, lastModifiedPropName);
 
                 stopwatch.Stop();
                 logger.LogInformation("Sync process completed successfully for type {Type} in {ElapsedMilliseconds} ms", typeof(T).Name, stopwatch.ElapsedMilliseconds);
@@ -36,12 +46,7 @@ namespace cosmosofflinewithLCC.Sync
             }
         }
 
-        private static System.Reflection.PropertyInfo GetProperty(Type type, string propertyName)
-        {
-            return type.GetProperty(propertyName) ?? throw new System.Exception($"Model must have {propertyName} property");
-        }
-
-        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, System.Reflection.PropertyInfo idProp, System.Reflection.PropertyInfo lastModifiedProp) where T : class, new()
+        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName) where T : class, new()
         {
             int itemsPushed = 0;
             var pending = await local.GetPendingChangesAsync();
@@ -52,10 +57,10 @@ namespace cosmosofflinewithLCC.Sync
 
             foreach (var localChange in pending)
             {
-                var id = idProp.GetValue(localChange)?.ToString();
+                var id = typeof(T).GetProperty(idPropName)?.GetValue(localChange)?.ToString();
                 var remoteItem = id != null ? await remote.GetAsync(id) : null;
-                var localLast = lastModifiedProp.GetValue(localChange) as System.DateTime?;
-                var remoteLast = remoteItem != null ? lastModifiedProp.GetValue(remoteItem) as System.DateTime? : null;
+                var localLast = typeof(T).GetProperty(lastModifiedPropName)?.GetValue(localChange) as DateTime?;
+                var remoteLast = remoteItem != null ? typeof(T).GetProperty(lastModifiedPropName)?.GetValue(remoteItem) as DateTime? : null;
 
                 if (remoteItem == null || (localLast.HasValue && remoteLast.HasValue && localLast > remoteLast))
                 {
@@ -87,7 +92,7 @@ namespace cosmosofflinewithLCC.Sync
             return itemsPushed;
         }
 
-        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, System.Reflection.PropertyInfo idProp, System.Reflection.PropertyInfo lastModifiedProp) where T : class, new()
+        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName) where T : class, new()
         {
             int itemsPulled = 0;
             var remoteItems = await remote.GetAllAsync();
@@ -99,10 +104,10 @@ namespace cosmosofflinewithLCC.Sync
             {
                 if (remoteItem == null) continue;
 
-                var id = idProp.GetValue(remoteItem)?.ToString();
+                var id = typeof(T).GetProperty(idPropName)?.GetValue(remoteItem)?.ToString();
                 var localItem = id != null ? await local.GetAsync(id) : null;
-                var remoteLast = lastModifiedProp.GetValue(remoteItem) as System.DateTime?;
-                var localLast = localItem != null ? lastModifiedProp.GetValue(localItem) as System.DateTime? : null;
+                var remoteLast = typeof(T).GetProperty(lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
+                var localLast = localItem != null ? typeof(T).GetProperty(lastModifiedPropName)?.GetValue(localItem) as DateTime? : null;
 
                 if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
                 {

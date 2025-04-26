@@ -23,7 +23,7 @@ namespace cosmosofflinewithLCC.Tests
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item> { pendingItem });
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified);
 
             // Assert
             remoteMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == pendingItem.Id && i.Content == pendingItem.Content && i.LastModified == now))), Times.Once);
@@ -46,7 +46,7 @@ namespace cosmosofflinewithLCC.Tests
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(new List<Item>()); // Prevent the pull logic from affecting the test
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified);
 
             // Assert
             remoteMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == pendingItem.Id && i.Content == pendingItem.Content && i.LastModified == now))), Times.Once);
@@ -69,7 +69,7 @@ namespace cosmosofflinewithLCC.Tests
             remoteMock.Setup(x => x.GetAllAsync()).ReturnsAsync(remoteItems);
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified);
 
             // Assert
             remoteMock.Verify(x => x.UpsertBulkAsync(It.IsAny<IEnumerable<Item>>()), Times.Never);
@@ -90,7 +90,7 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetAsync("4")).ReturnsAsync(localItem);
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified);
 
             // Assert
             localMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now))), Times.Once);
@@ -109,7 +109,7 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetAsync("5")).ReturnsAsync((Item?)null);
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified);
 
             // Assert
             localMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items => items.Any(i => i.Id == remoteItem.Id && i.Content == remoteItem.Content && i.LastModified == now))), Times.Once);
@@ -129,7 +129,7 @@ namespace cosmosofflinewithLCC.Tests
             localMock.Setup(x => x.GetAsync("6")).ReturnsAsync(localItem);
 
             // Act
-            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object);
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified);
 
             // Assert
             localMock.Verify(x => x.UpsertBulkAsync(It.IsAny<IEnumerable<Item>>()), Times.Never);
