@@ -26,7 +26,7 @@ namespace cosmosofflinewithLCC.Sync
             throw new ArgumentException("Invalid property expression. Ensure the expression is a simple property access, e.g., x => x.PropertyName.");
         }
 
-        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression) where T : class, new()
+        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId = null) where T : class, new()
         {
             var idPropName = GetPropertyName(idExpression);
             var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
@@ -39,10 +39,10 @@ namespace cosmosofflinewithLCC.Sync
             {
                 // Metrics
                 // Push local pending changes to remote
-                int itemsPushed = await PushPendingChanges(local, remote, logger, idPropName, lastModifiedPropName);
+                int itemsPushed = await PushPendingChanges(local, remote, logger, idPropName, lastModifiedPropName, userId);
 
                 // Pull remote changes to local
-                int itemsPulled = await PullRemoteChanges(local, remote, logger, idPropName, lastModifiedPropName);
+                int itemsPulled = await PullRemoteChanges(local, remote, logger, idPropName, lastModifiedPropName, userId);
 
                 stopwatch.Stop();
                 logger.LogInformation("Sync process completed successfully for type {Type} in {ElapsedMilliseconds} ms", typeof(T).Name, stopwatch.ElapsedMilliseconds);
@@ -55,10 +55,37 @@ namespace cosmosofflinewithLCC.Sync
             }
         }
 
-        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName) where T : class, new()
+        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string userId = null) where T : class, new()
         {
             int itemsPushed = 0;
-            var pending = await local.GetPendingChangesAsync();
+
+            // Get pending changes
+            List<T> pending;
+
+            if (userId != null && local is SqliteStore<T> sqliteStore)
+            {
+                // Use the optimized method for SqliteStore if we have a userId
+                // Since userId is mandatory, this will be more efficient than the general method
+                pending = await sqliteStore.GetPendingChangesForUserAsync(userId);
+                logger.LogInformation("Used optimized query to retrieve {Count} pending changes for user {UserId}", pending.Count, userId);
+            }
+            else
+            {
+                // Fall back to standard method if we can't use the optimized path
+                pending = await local.GetPendingChangesAsync();
+
+                // If userId is provided, filter pending changes to only include those for the current user
+                // This is safe because userId is guaranteed to be present on all documents
+                if (userId != null)
+                {
+                    var userIdProp = typeof(T).GetProperty("UserId");
+                    pending = pending.Where(item =>
+                        userId.Equals(userIdProp?.GetValue(item)?.ToString(),
+                        StringComparison.OrdinalIgnoreCase)).ToList();
+                    logger.LogInformation("Filtered to {Count} pending changes for user {UserId}", pending.Count, userId);
+                }
+            }
+
             logger.LogInformation("Found {Count} pending changes to push to remote", pending.Count);
 
             var itemsToUpsert = new List<T>();
@@ -101,10 +128,26 @@ namespace cosmosofflinewithLCC.Sync
             return itemsPushed;
         }
 
-        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName) where T : class, new()
+        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string userId = null) where T : class, new()
         {
             int itemsPulled = 0;
-            var remoteItems = await remote.GetAllAsync();
+
+            // Get all remote items, filtered by user if provided
+            List<T> remoteItems;
+
+            if (!string.IsNullOrEmpty(userId))
+            {
+                // Use user-specific query if userId is provided
+                remoteItems = await remote.GetByUserIdAsync(userId);
+                logger.LogInformation("Retrieved {Count} items for user {UserId} from remote store", remoteItems.Count, userId);
+            }
+            else
+            {
+                // No user ID provided, retrieve all items (not recommended for production)
+                remoteItems = await remote.GetAllAsync();
+                logger.LogWarning("No userId provided for filtering. Retrieved all {Count} items from remote store.", remoteItems.Count);
+            }
+
             logger.LogInformation("Found {Count} items on remote to sync to local", remoteItems.Count);
 
             var itemsToUpsert = new List<T>();
@@ -136,6 +179,27 @@ namespace cosmosofflinewithLCC.Sync
             }
 
             return itemsPulled;
+        }
+
+        /// <summary>
+        /// Performs an initial data pull for a specific user without pushing any local changes
+        /// </summary>
+        public static async Task InitialUserDataPullAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger,
+            Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId)
+            where T : class, new()
+        {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must be provided for initial user data pull", nameof(userId));
+            }
+
+            logger.LogInformation("Starting initial data pull for user {UserId} for type {Type}", userId, typeof(T).Name);
+            var idPropName = GetPropertyName(idExpression);
+            var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
+
+            await PullRemoteChanges(local, remote, logger, idPropName, lastModifiedPropName, userId);
+
+            logger.LogInformation("Initial data pull completed for user {UserId}", userId);
         }
     }
 }

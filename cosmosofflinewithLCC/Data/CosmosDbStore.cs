@@ -76,21 +76,42 @@ namespace cosmosofflinewithLCC.Data
             }
         }
 
+        /// <summary>
+        /// Gets all documents for a specific user ID
+        /// </summary>
+        /// <param name="userId">The user ID to filter by</param>
+        /// <returns>A list of documents belonging to the specified user</returns>
         public async Task<List<T>> GetByUserIdAsync(string userId)
         {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty", nameof(userId));
+            }
+
             var items = new List<T>();
 
-            // Using parameterized query to avoid SQL injection
-            var queryText = "SELECT * FROM c WHERE c.userId = @userId";
+            // Since userId could be stored as either camelCase (userId) or PascalCase (UserId)
+            // we need to query for both forms to be safe
+            var queryText = @"SELECT * FROM c WHERE c.userId = @userId OR c.UserId = @userId";
             var queryDefinition = new QueryDefinition(queryText)
                 .WithParameter("@userId", userId);
 
-            var query = _container.GetItemQueryIterator<T>(queryDefinition);
-
-            while (query.HasMoreResults)
+            try
             {
-                var response = await query.ReadNextAsync();
-                items.AddRange(response);
+                var query = _container.GetItemQueryIterator<T>(queryDefinition);
+
+                while (query.HasMoreResults)
+                {
+                    var response = await query.ReadNextAsync();
+                    items.AddRange(response);
+                }
+
+                Console.WriteLine($"Found {items.Count} items in Cosmos DB for user {userId}");
+            }
+            catch (CosmosException ex)
+            {
+                Console.WriteLine($"Error in GetByUserIdAsync: {ex.Message}. Status code: {ex.StatusCode}");
+                throw;
             }
 
             return items;

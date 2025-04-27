@@ -81,7 +81,7 @@ namespace cosmosofflinewithLCC
                 logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
 
                 // Perform initial pull from remote to local without pushing any local changes, filtered by user ID
-                await InitialUserDataPull(localStore, remoteStore, logger, currentUserId);
+                await SyncEngine.InitialUserDataPullAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
 
                 logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
             }
@@ -106,8 +106,8 @@ namespace cosmosofflinewithLCC
             };
             await remoteStore.UpsertAsync(remoteItem);
 
-            // Sync for Item
-            await SyncEngine.SyncAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified);
+            // Sync for Item - passing the current user ID to filter data
+            await SyncEngine.SyncAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
 
             // Result for Item
             var syncedRemote = await remoteStore.GetAsync("1");
@@ -118,39 +118,13 @@ namespace cosmosofflinewithLCC
             // Example: Use for another document type (Uncomment and define Order model to use)
             // var orderLocalStore = host.Services.GetRequiredService<IDocumentStore<Order>>();
             // var orderRemoteStore = host.Services.GetRequiredService<CosmosDbStore<Order>>();
-            // await SyncEngine.SyncAsync(orderLocalStore, orderRemoteStore);
+            // await SyncEngine.SyncAsync(orderLocalStore, orderRemoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
         }
 
         private static async Task<bool> IsLocalDbEmpty<T>(IDocumentStore<T> localStore) where T : class, new()
         {
             var items = await localStore.GetAllAsync();
             return items.Count == 0;
-        }
-
-        private static async Task InitialUserDataPull<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string userId) where T : class, new()
-        {
-            try
-            {
-                // Get only the items for the specific user from remote store
-                var remoteItems = await remote.GetByUserIdAsync(userId);
-                logger.LogInformation("Found {Count} items for user {UserId} in remote store to pull into local database", remoteItems.Count, userId);
-
-                if (remoteItems.Count > 0)
-                {
-                    // Insert user-specific remote items to local store
-                    await local.UpsertBulkAsync(remoteItems);
-                    logger.LogInformation("Successfully pulled {Count} items for user {UserId} from remote store", remoteItems.Count, userId);
-                }
-                else
-                {
-                    logger.LogInformation("No items found for user {UserId} in remote store to pull", userId);
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error during initial data pull from remote store for user {UserId}", userId);
-                throw;
-            }
         }
     }
 }

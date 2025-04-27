@@ -15,11 +15,14 @@ graph TD
         LocalStore -- Implements --> IStore[IDocumentStore Interface]
         LocalStore --> PendingChanges[(Pending Changes Table)]
         LocalStore --> LocalDB[(SQLite Local DB)]
+        App -- First Launch Check --> FirstLaunch[First Launch Detection]
+        FirstLaunch -- If First Launch --> InitialPull[Initial User Data Pull]
     end
     
     subgraph Sync Component
         SyncEngine[Sync Engine] --> Push[Push Changes]
         SyncEngine --> Pull[Pull Changes]
+        InitialPull -- User-specific Load --> Pull
         Push --> ConflictResolution[Time-based Conflict Resolution]
         Pull --> ConflictResolution
     end
@@ -27,11 +30,14 @@ graph TD
     subgraph Azure Cloud
         RemoteStore[Cosmos DB Store] -- Implements --> IStore
         RemoteStore --> CosmosDB[(Azure Cosmos DB)]
+        CosmosDB -- User-partitioned Data --> UserFilter[User Data Filtering]
     end
     
     App -- Read/Write --> LocalStore
     Push -- Upload Pending Changes --> RemoteStore
     Pull -- Download New Data --> RemoteStore
+    InitialPull -- User-filtered Data --> UserFilter
+    UserFilter -- User-specific Data --> RemoteStore
     ConflictResolution -- Update Local --> LocalStore
     ConflictResolution -- Update Remote --> RemoteStore
     
@@ -39,11 +45,13 @@ graph TD
     classDef local fill:#5C2D91,color:white;
     classDef component fill:#00BCF2,color:white;
     classDef interface fill:#FFB900,color:black;
+    classDef user fill:#107C10,color:white;
     
     class RemoteStore,CosmosDB azure;
     class LocalStore,LocalDB,PendingChanges local;
     class SyncEngine,Push,Pull,ConflictResolution component;
     class IStore interface;
+    class FirstLaunch,InitialPull,UserFilter user;
 ```
 
 #### Architecture Diagram Explanation
@@ -84,24 +92,36 @@ sequenceDiagram
     participant Sync as Sync Engine
     participant Remote as Cosmos DB Store
     
+    Note over App,Remote: First Launch Detection
+    App->>App: Check if SQLite DB exists and has data
+    App->>App: Get Current User ID
+    
+    alt First Launch
+        Note over App,Remote: Initial User Data Pull
+        App->>Sync: Trigger Initial User Data Pull
+        Sync->>Remote: Request User-Specific Data (userId filter)
+        Remote-->>Sync: Return User's Items Only
+        Sync->>Local: Store Initial Data
+    end
+    
     Note over App,Remote: Normal Operation (Online or Offline)
     App->>Local: Read/Write Data
     Local->>Local: Store in SQLite DB
     Local->>Local: Track in Pending Changes
     
-    Note over App,Remote: Synchronization Process
+    Note over App,Remote: Regular Synchronization Process
     App->>Sync: Trigger Sync
     Sync->>Local: Get Pending Changes
     Local-->>Sync: Return Changed Items
     
     Note over Sync: Push Phase
-    Sync->>Remote: Push Local Changes
+    Sync->>Remote: Push Local Changes (with userId)
     Remote-->>Sync: Confirm Changes
     Sync->>Local: Clear Pending Changes Flag
     
     Note over Sync: Pull Phase
-    Sync->>Remote: Get All Remote Items
-    Remote-->>Sync: Return All Items
+    Sync->>Remote: Get User's Remote Items (userId filter)
+    Remote-->>Sync: Return User's Items Only
     
     loop For Each Remote Item
         Sync->>Sync: Compare LastModified
@@ -259,3 +279,59 @@ dotnet test tests/cosmosofflinewithLCC.IntegrationTests
 ## License
 
 [MIT License](LICENSE)
+
+## Initial Data Load and User-Specific Data
+
+The application supports user-specific data and implements an intelligent initial data load mechanism:
+
+### User-Specific Data
+
+- Each document in the system includes a `UserId` property that associates data with specific users
+- This enables multi-user scenarios where each user only accesses their own data
+- The current user ID is determined at application startup (in a real application, this would come from authentication)
+- User ID can be configured via the `CURRENT_USER_ID` environment variable (defaults to "user1")
+
+### Initial Data Load
+
+The application implements a smart initial load strategy:
+
+1. **First Launch Detection**:
+   - The application automatically detects first launch by checking if the SQLite database exists and has data
+   - This eliminates the need for user intervention or configuration during first-time setup
+
+2. **User-Specific Initial Pull**:
+   - On first launch, the application performs an initial pull of user-specific data from Cosmos DB
+   - Only documents associated with the current user's ID are downloaded to the local SQLite database
+   - This ensures:
+     - Data privacy by only retrieving relevant user data
+     - Optimized performance by limiting the initial data transfer
+     - Reduced storage requirements on the client device
+
+3. **Efficient Synchronization**:
+   - After the initial data load, subsequent synchronizations only transfer changes
+   - This minimizes data transfer and improves performance for users with large datasets
+
+This approach is particularly beneficial for:
+- Mobile applications with limited network bandwidth
+- Multi-tenant systems where users should only access their own data
+- Applications that need to optimize initial startup time
+
+### Example Usage
+
+The `Program.cs` file demonstrates the initial data load functionality:
+
+```csharp
+// Set the current user ID - in a real app this would come from authentication
+string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
+
+// Check if this is the first launch by checking if the SQLite DB exists and has any data
+bool isFirstLaunch = !File.Exists(sqlitePath) || await IsLocalDbEmpty(localStore);
+
+if (isFirstLaunch)
+{
+    logger.LogInformation("First application launch detected. Performing initial data pull...");
+    
+    // Perform initial pull from remote to local without pushing any local changes, filtered by user ID
+    await InitialUserDataPull(localStore, remoteStore, logger, currentUserId);
+}
+```

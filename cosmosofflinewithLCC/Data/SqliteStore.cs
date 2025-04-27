@@ -151,18 +151,68 @@ namespace cosmosofflinewithLCC.Data
             await cmd.ExecuteNonQueryAsync();
         }
 
+        /// <summary>
+        /// Gets all documents for a specific user
+        /// </summary>
+        /// <param name="userId">The user ID to filter by</param>
+        /// <returns>A list of documents belonging to the specified user</returns>
         public async Task<List<T>> GetByUserIdAsync(string userId)
         {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty", nameof(userId));
+            }
+
             var items = new List<T>();
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
 
-            // Parse the JSON to find records with matching userId
+            // Try both camelCase and PascalCase property names for maximum compatibility
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $"SELECT Content FROM [{_tableName}] WHERE json_extract(Content, '$.userId') = @userId";
+            cmd.CommandText = $@"SELECT Content FROM [{_tableName}] 
+                                WHERE json_extract(Content, '$.userId') = @userId 
+                                OR json_extract(Content, '$.UserId') = @userId";
             cmd.Parameters.AddWithValue("@userId", userId);
 
             using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var json = reader.GetString(0);
+                items.Add(System.Text.Json.JsonSerializer.Deserialize<T>(json)!);
+            }
+
+            return items;
+        }
+
+        /// <summary>
+        /// Gets all pending changes for a specific user
+        /// </summary>
+        /// <param name="userId">The user ID to filter by</param>
+        /// <returns>A list of pending changes belonging to the specified user</returns>
+        public async Task<List<T>> GetPendingChangesForUserAsync(string userId)
+        {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty", nameof(userId));
+            }
+
+            var items = new List<T>();
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            // Optimize the query by directly filtering on the UserId field
+            // This is more efficient than the general query with a WHERE clause on IsPendingChange
+            // Since userId is mandatory, we can use an indexable query pattern
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = $@"SELECT i.Content FROM [{_tableName}] i 
+                       JOIN PendingChanges_{_tableName} p 
+                       ON i.Id = p.Id 
+                       WHERE json_extract(i.Content, '$.userId') = @userId 
+                       OR json_extract(i.Content, '$.UserId') = @userId";
+            cmd.Parameters.AddWithValue("@userId", userId);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+
             while (await reader.ReadAsync())
             {
                 var json = reader.GetString(0);
