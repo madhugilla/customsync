@@ -224,6 +224,7 @@ The application uses the following environment variables, which are automaticall
 
 - `COSMOS_ENDPOINT`: The Cosmos DB endpoint (defaults to the emulator endpoint: https://localhost:8081/)
 - `COSMOS_KEY`: The Cosmos DB key (defaults to the emulator key)
+- `CURRENT_USER_ID`: The user ID for data filtering (defaults to "user1")
 
 ## Project Structure
 
@@ -250,7 +251,7 @@ Conflict resolution uses the Last-Write-Wins strategy where:
 
 ### Data Storage
 
-- **SqliteStore**: Uses SQLite for local offline storage
+- **SqliteStore**: Uses SQLite for local offline storage with user-specific data filtering capabilities
 - **CosmosDbStore**: Communicates with Azure Cosmos DB
 
 ### Models
@@ -258,6 +259,34 @@ Conflict resolution uses the Last-Write-Wins strategy where:
 Models must implement:
 - A unique ID property
 - A LastModified timestamp property for conflict resolution
+- A UserId property for user-specific data filtering
+
+### User-Specific Data Handling
+
+The solution now includes enhanced support for user-specific data operations:
+
+1. **User-Specific Data Retrieval**:
+   - The `IDocumentStore` interface now includes a `GetByUserIdAsync(string userId)` method
+   - This allows efficient filtering of data by user ID directly at the store level
+   - Implemented in both SQLite and Cosmos DB stores for consistent behavior
+
+2. **User-Specific Pending Changes**:
+   - Added capability to retrieve only pending changes for a specific user
+   - The SQLite store implements `GetPendingChangesForUserAsync(string userId)`
+   - This optimization is valuable for multi-user scenarios where only a specific user's changes need synchronization
+
+3. **SQLite Schema Improvements**:
+   - The SQLite store now includes a `UserId` column in its schema
+   - It detects and automatically adds this column for backward compatibility
+   - Uses JSON extraction to efficiently query user-specific data
+   - Optimized queries for both user-filtered and pending changes operations
+
+4. **User Data Privacy**:
+   - Enhanced security boundaries between user data
+   - Each user's data is properly isolated and filtered during sync operations
+   - Prevents data leakage between users in multi-tenant scenarios
+
+These enhancements improve the solution's scalability, performance, and security for multi-user applications.
 
 ## Testing
 
