@@ -1,6 +1,6 @@
-# Cosmos DB Offline Synchronization with LCC
+# Cosmos DB Offline Synchronization with Last-Write-Wins
 
-This project demonstrates an offline-first synchronization solution between Azure Cosmos DB and SQLite using Last-Changed-Continues (LCC) conflict resolution strategy.
+This project demonstrates an offline-first synchronization solution between Azure Cosmos DB and SQLite using Last-Write-Wins conflict resolution strategy.
 
 ## Overview
 
@@ -140,7 +140,7 @@ The sequence diagram illustrates the temporal flow of data through the system:
    - This approach balances data integrity with offline functionality
 
 5. **Conflict Resolution Strategy**:
-   - Leverages the "Last-Changed-Continues" (LCC) pattern
+   - Leverages the "Last-Write-Wins" pattern
    - Each document contains a LastModified timestamp field
    - When conflicts occur:
      - If local timestamp > remote timestamp: local version wins
@@ -151,7 +151,7 @@ This synchronization approach ensures data consistency across devices while allo
 
 ### Key Components
 
-- **SyncEngine**: Core synchronization logic with LCC conflict resolution strategy
+- **SyncEngine**: Core synchronization logic with Last-Write-Wins conflict resolution strategy
 - **CosmosDbStore**: Repository implementation for Azure Cosmos DB
 - **SqliteStore**: Repository implementation for local SQLite database
 - **Unit and Integration Tests**: Comprehensive test suite
@@ -224,7 +224,7 @@ The SyncEngine implements a bidirectional synchronization strategy:
 1. **Push Phase**: Pushes pending local changes to the remote Cosmos DB
 2. **Pull Phase**: Pulls remote changes to the local SQLite database
 
-Conflict resolution uses the Last-Changed-Continues (LCC) strategy where:
+Conflict resolution uses the Last-Write-Wins strategy where:
 - If local timestamp > remote timestamp: local version wins
 - If remote timestamp > local timestamp: remote version wins
 
