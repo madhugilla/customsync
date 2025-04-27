@@ -1,4 +1,6 @@
 using Microsoft.Azure.Cosmos;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Reflection;
 
 namespace cosmosofflinewithLCC.Data
@@ -8,71 +10,194 @@ namespace cosmosofflinewithLCC.Data
     {
         private readonly Container _container;
         private readonly PropertyInfo _idProp;
+        private readonly PropertyInfo? _userIdProp;
+
+        // Cosmos DB requires exact casing for the partition key property
+        private const string COSMOS_PARTITION_KEY_NAME = "userId";
+
         public CosmosDbStore(Container container)
         {
             _container = container;
             _idProp = typeof(T).GetProperty("Id") ?? throw new System.Exception("Model must have Id property");
+
+            // Find the userId property (could be UserId or userId)
+            _userIdProp = typeof(T).GetProperty("UserId") ?? typeof(T).GetProperty("userId");
+
+            if (_userIdProp == null)
+            {
+                throw new System.Exception("Model must have UserId property for partitioning");
+            }
         }
+
         public async Task<T?> GetAsync(string id)
         {
             try
             {
-                var response = await _container.ReadItemAsync<T>(id, new PartitionKey(id));
-                return response.Resource;
+                // For point reads with partition key, we need the userId, but we might not know it
+                // So we use a query approach that works for any partition key
+                var query = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
+                    .WithParameter("@id", id);
+
+                var iterator = _container.GetItemQueryIterator<T>(query);
+
+                while (iterator.HasMoreResults)
+                {
+                    var response = await iterator.ReadNextAsync();
+                    if (response.Count > 0)
+                    {
+                        return response.FirstOrDefault();
+                    }
+                }
+
+                return null;
             }
             catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 return null;
             }
         }
+
         public async Task UpsertAsync(T document)
         {
-            var id = _idProp.GetValue(document)?.ToString() ?? throw new System.Exception("Id required");
-            await _container.UpsertItemAsync(document, new PartitionKey(id));
+            try
+            {
+                // Get the document ID and convert to lowercase for Cosmos DB
+                string? id = _idProp.GetValue(document)?.ToString();
+                if (string.IsNullOrEmpty(id))
+                {
+                    throw new System.Exception("Id cannot be null or empty");
+                }
+
+                // Get the partition key value (userId)
+                string? userId = _userIdProp?.GetValue(document)?.ToString();
+                if (string.IsNullOrEmpty(userId))
+                {
+                    throw new System.Exception("UserId cannot be null or empty");
+                }
+
+                // Serialize to JSON string first
+                string json = JsonConvert.SerializeObject(document);
+
+                // Parse into JObject to manipulate properties
+                JObject jObject = JObject.Parse(json);
+
+                // Ensure the document has the correct properties for Cosmos DB:
+                // 1. Lowercase 'id' (Cosmos DB standard)
+                jObject.Remove("Id");
+                jObject["id"] = id;
+
+                // 2. Ensure the partition key has the EXACT name expected by Cosmos DB
+                // Remove any variations like "UserId" or "userId"
+                jObject.Remove("UserId");
+                jObject.Remove("userId");
+
+                // Add the partition key with the exact name Cosmos DB expects
+                jObject[COSMOS_PARTITION_KEY_NAME] = userId;
+
+                Console.WriteLine($"Upserting document with ID: {id}, partition key: {userId}, key property: {COSMOS_PARTITION_KEY_NAME}");
+
+                // Use the exact partition key value for the operation
+                await _container.UpsertItemAsync<JObject>(
+                    item: jObject,
+                    partitionKey: new PartitionKey(userId)
+                );
+            }
+            catch (CosmosException ex)
+            {
+                Console.WriteLine($"Cosmos DB Error: {ex.StatusCode}, {ex.SubStatusCode}, Message: {ex.Message}");
+                throw;
+            }
         }
+
         public async Task<List<T>> GetAllAsync()
         {
             var items = new List<T>();
             var query = _container.GetItemQueryIterator<T>("SELECT * FROM c");
+
             while (query.HasMoreResults)
             {
                 var response = await query.ReadNextAsync();
                 items.AddRange(response);
             }
+
             return items;
         }
+
         public Task<List<T>> GetPendingChangesAsync() => Task.FromResult(new List<T>()); // Not used for remote
+
         public Task RemovePendingChangeAsync(string id) => Task.CompletedTask; // Not used for remote
 
         public async Task UpsertBulkAsync(IEnumerable<T> documents)
         {
-            var partitionKeyProperty = typeof(T).GetProperty("Id"); // Replace with your partition key property name
-            if (partitionKeyProperty == null)
+            try
             {
-                throw new Exception("PartitionKey property is required for bulk upsert");
+                // Create a list to track failures
+                var failedItems = new List<(T document, Exception exception)>();
+
+                // Process each document individually
+                foreach (var document in documents)
+                {
+                    try
+                    {
+                        // Get the document ID and convert to lowercase for Cosmos DB
+                        string? id = _idProp.GetValue(document)?.ToString();
+                        if (string.IsNullOrEmpty(id))
+                        {
+                            throw new System.Exception("Id cannot be null or empty");
+                        }
+
+                        // Get the partition key value (userId)
+                        string? userId = _userIdProp?.GetValue(document)?.ToString();
+                        if (string.IsNullOrEmpty(userId))
+                        {
+                            throw new System.Exception("UserId cannot be null or empty");
+                        }
+
+                        // Serialize to JSON string first
+                        string json = JsonConvert.SerializeObject(document);
+
+                        // Parse into JObject to manipulate properties
+                        JObject jObject = JObject.Parse(json);
+
+                        // Ensure the document has the correct properties for Cosmos DB:
+                        // 1. Lowercase 'id' (Cosmos DB standard)
+                        jObject.Remove("Id");
+                        jObject["id"] = id;
+
+                        // 2. Ensure the partition key has the EXACT name expected by Cosmos DB
+                        // Remove any variations like "UserId" or "userId"
+                        jObject.Remove("UserId");
+                        jObject.Remove("userId");
+
+                        // Add the partition key with the exact name Cosmos DB expects
+                        jObject[COSMOS_PARTITION_KEY_NAME] = userId;
+
+                        Console.WriteLine($"Bulk upserting document with ID: {id}, partition key: {userId}, key property: {COSMOS_PARTITION_KEY_NAME}");
+
+                        // Use the exact partition key value for the operation
+                        await _container.UpsertItemAsync<JObject>(
+                            item: jObject,
+                            partitionKey: new PartitionKey(userId)
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error in bulk operation for item {_idProp.GetValue(document)}: {ex.Message}");
+                        failedItems.Add((document, ex));
+                    }
+                }
+
+                // If we had any failures, throw an exception with details
+                if (failedItems.Count > 0)
+                {
+                    throw new Exception($"Error during bulk upsert: {failedItems.Count} items failed",
+                        failedItems.FirstOrDefault().exception);
+                }
             }
-
-            var groupedByPartitionKey = documents
-                .GroupBy(doc => partitionKeyProperty.GetValue(doc)?.ToString() ?? string.Empty);
-
-            foreach (var group in groupedByPartitionKey)
+            catch (Exception ex)
             {
-                var partitionKey = new PartitionKey(group.Key);
-                var batch = _container.CreateTransactionalBatch(partitionKey);
-
-                foreach (var document in group)
-                {
-                    var id = partitionKeyProperty.GetValue(document)?.ToString();
-                    Console.WriteLine($"Upserting document with ID: {id} in partition: {group.Key}");
-                    batch.UpsertItem(document);
-                }
-
-                var response = await batch.ExecuteAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new Exception($"Bulk upsert failed for partition key {group.Key} with status code {response.StatusCode}");
-                }
+                Console.WriteLine($"Bulk operation failed: {ex.Message}");
+                throw;
             }
         }
 
@@ -90,15 +215,18 @@ namespace cosmosofflinewithLCC.Data
 
             var items = new List<T>();
 
-            // Since userId could be stored as either camelCase (userId) or PascalCase (UserId)
-            // we need to query for both forms to be safe
-            var queryText = @"SELECT * FROM c WHERE c.userId = @userId OR c.UserId = @userId";
-            var queryDefinition = new QueryDefinition(queryText)
-                .WithParameter("@userId", userId);
-
             try
             {
-                var query = _container.GetItemQueryIterator<T>(queryDefinition);
+                // Use the partition key directly for efficient querying
+                var queryOptions = new QueryRequestOptions
+                {
+                    PartitionKey = new PartitionKey(userId)
+                };
+
+                var query = _container.GetItemQueryIterator<T>(
+                    queryText: "SELECT * FROM c",
+                    requestOptions: queryOptions
+                );
 
                 while (query.HasMoreResults)
                 {
@@ -110,11 +238,23 @@ namespace cosmosofflinewithLCC.Data
             }
             catch (CosmosException ex)
             {
-                Console.WriteLine($"Error in GetByUserIdAsync: {ex.Message}. Status code: {ex.StatusCode}");
+                Console.WriteLine($"Error in GetByUserIdAsync: {ex.Message}. Status code: {ex.StatusCode}, Substatus: {ex.SubStatusCode}");
                 throw;
             }
 
             return items;
+        }
+
+        /// <summary>
+        /// Gets pending changes for a specific user by running a filtered query
+        /// </summary>
+        /// <param name="userId">The user ID to filter by</param>
+        /// <returns>A list of pending changes for the specified user</returns>
+        public Task<List<T>> GetPendingChangesForUserAsync(string userId)
+        {
+            // This is a stub since Cosmos DB doesn't track pending changes
+            // The implementation is on the local SQLite side
+            return Task.FromResult(new List<T>());
         }
     }
 }

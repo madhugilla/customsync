@@ -39,7 +39,14 @@ namespace cosmosofflinewithLCC
                     {
                         var client = provider.GetRequiredService<CosmosClient>();
                         var db = await client.CreateDatabaseIfNotExistsAsync(databaseId);
-                        var container = await db.Database.CreateContainerIfNotExistsAsync(containerId, "/id");
+
+                        // Use userId as the partition key path instead of id
+                        var container = await db.Database.CreateContainerIfNotExistsAsync(
+                            id: containerId,
+                            partitionKeyPath: "/userId",
+                            throughput: 400
+                        );
+
                         return container.Container;
                     });
 
@@ -81,7 +88,8 @@ namespace cosmosofflinewithLCC
                 logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
 
                 // Perform initial pull from remote to local without pushing any local changes, filtered by user ID
-                await SyncEngine.InitialUserDataPullAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
+                // Pass 'Item' as the document type to ensure proper type identification
+                await SyncEngine.InitialUserDataPullAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId, "Item");
 
                 logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
             }
@@ -92,7 +100,8 @@ namespace cosmosofflinewithLCC
                 Id = "1",
                 Content = "Local version",
                 LastModified = DateTime.UtcNow,
-                UserId = currentUserId
+                UserId = currentUserId,
+                Type = "Item"
             };
             await localStore.UpsertAsync(item);
 
@@ -102,7 +111,8 @@ namespace cosmosofflinewithLCC
                 Id = "1",
                 Content = "Remote version",
                 LastModified = DateTime.UtcNow.AddSeconds(-10),
-                UserId = currentUserId
+                UserId = currentUserId,
+                Type = "Item"
             };
             await remoteStore.UpsertAsync(remoteItem);
 

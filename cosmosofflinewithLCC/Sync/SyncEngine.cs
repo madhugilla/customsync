@@ -26,7 +26,43 @@ namespace cosmosofflinewithLCC.Sync
             throw new ArgumentException("Invalid property expression. Ensure the expression is a simple property access, e.g., x => x.PropertyName.");
         }
 
-        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId = null) where T : class, new()
+        /// <summary>
+        /// Ensures a document has the required properties for Cosmos DB
+        /// </summary>
+        private static void EnsureCosmosProperties<T>(T document, string userId, string? docType = null) where T : class, new()
+        {
+            // Set the userId (partition key) if the property exists
+            var userIdProp = typeof(T).GetProperty("UserId");
+            if (userIdProp != null && userIdProp.CanWrite)
+            {
+                // Always set the userId to match the provided value to ensure partition key consistency
+                // This is critical for Cosmos DB operations
+                userIdProp.SetValue(document, userId);
+
+                Console.WriteLine($"Set UserId to {userId} for document");
+            }
+            else
+            {
+                Console.WriteLine($"WARNING: UserId property not found on type {typeof(T).Name}");
+            }
+
+            // Set the type property if it exists
+            var typeProp = typeof(T).GetProperty("Type");
+            if (typeProp != null && typeProp.CanWrite)
+            {
+                // Only set if not already set
+                var currentValue = typeProp.GetValue(document);
+                if (currentValue == null || string.IsNullOrEmpty(currentValue.ToString()))
+                {
+                    // If a specific docType is provided, use it, otherwise use the class name
+                    var typeValue = !string.IsNullOrEmpty(docType) ? docType : typeof(T).Name;
+                    typeProp.SetValue(document, typeValue);
+                    Console.WriteLine($"Set Type to {typeValue} for document");
+                }
+            }
+        }
+
+        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string? userId = null) where T : class, new()
         {
             var idPropName = GetPropertyName(idExpression);
             var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
@@ -55,7 +91,7 @@ namespace cosmosofflinewithLCC.Sync
             }
         }
 
-        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string userId = null) where T : class, new()
+        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string? userId = null) where T : class, new()
         {
             int itemsPushed = 0;
 
@@ -93,8 +129,21 @@ namespace cosmosofflinewithLCC.Sync
 
             foreach (var localChange in pending)
             {
+                // Ensure document has required Cosmos DB properties before sending to remote
+                if (!string.IsNullOrEmpty(userId) && remote is CosmosDbStore<T>)
+                {
+                    // Always ensure the userId is set for proper partitioning
+                    EnsureCosmosProperties(localChange, userId);
+                }
+
                 var id = typeof(T).GetProperty(idPropName)?.GetValue(localChange)?.ToString();
-                var remoteItem = id != null ? await remote.GetAsync(id) : null;
+                if (string.IsNullOrEmpty(id))
+                {
+                    logger.LogWarning("Item has null or empty ID and will be skipped");
+                    continue;
+                }
+
+                var remoteItem = await remote.GetAsync(id);
                 var localLast = typeof(T).GetProperty(lastModifiedPropName)?.GetValue(localChange) as DateTime?;
                 var remoteLast = remoteItem != null ? typeof(T).GetProperty(lastModifiedPropName)?.GetValue(remoteItem) as DateTime? : null;
 
@@ -108,14 +157,24 @@ namespace cosmosofflinewithLCC.Sync
                     logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
                 }
 
-                if (id != null)
-                {
-                    idsToRemove.Add(id);
-                }
+                idsToRemove.Add(id);
             }
 
             if (itemsToUpsert.Any())
             {
+                // Important: Ensure each item in the bulk operation has the correct partition key
+                foreach (var item in itemsToUpsert)
+                {
+                    if (!string.IsNullOrEmpty(userId))
+                    {
+                        var userIdProp = typeof(T).GetProperty("UserId");
+                        if (userIdProp != null)
+                        {
+                            userIdProp.SetValue(item, userId);
+                        }
+                    }
+                }
+
                 await remote.UpsertBulkAsync(itemsToUpsert);
                 itemsPushed += itemsToUpsert.Count;
             }
@@ -128,7 +187,7 @@ namespace cosmosofflinewithLCC.Sync
             return itemsPushed;
         }
 
-        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string userId = null) where T : class, new()
+        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string? userId = null) where T : class, new()
         {
             int itemsPulled = 0;
 
@@ -185,15 +244,17 @@ namespace cosmosofflinewithLCC.Sync
         /// Performs an initial data pull for a specific user without pushing any local changes
         /// </summary>
         public static async Task InitialUserDataPullAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger,
-            Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId)
-            where T : class, new()
+            Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression,
+            string userId, string? docType = null) where T : class, new()
         {
             if (string.IsNullOrEmpty(userId))
             {
                 throw new ArgumentException("userId must be provided for initial user data pull", nameof(userId));
             }
 
-            logger.LogInformation("Starting initial data pull for user {UserId} for type {Type}", userId, typeof(T).Name);
+            logger.LogInformation("Starting initial data pull for user {UserId} for type {Type}", userId,
+                !string.IsNullOrEmpty(docType) ? docType : typeof(T).Name);
+
             var idPropName = GetPropertyName(idExpression);
             var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
 
