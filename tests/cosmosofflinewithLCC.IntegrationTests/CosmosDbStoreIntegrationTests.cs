@@ -9,6 +9,7 @@ using Xunit;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
+    [Collection("SequentialTests")]
     public class CosmosDbStoreIntegrationTests : IDisposable
     {
         private readonly Container _container;
@@ -33,41 +34,28 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
         private async Task CleanupContainerAsync()
         {
-            // Batch delete items in the container
             var query = new QueryDefinition("SELECT c.id FROM c");
-            using var iterator = _container.GetItemQueryIterator<dynamic>(query);
-
-            var idsToDelete = new List<string>();
-
-            while (iterator.HasMoreResults)
+            while (true)
             {
-                var response = await iterator.ReadNextAsync();
-                foreach (var item in response)
+                using var iterator = _container.GetItemQueryIterator<dynamic>(query);
+                var idsToDelete = new List<string>();
+
+                while (iterator.HasMoreResults)
                 {
-                    var id = (string)item.id; // Explicitly cast to string
-                    Console.WriteLine($"Deleting item with ID: {id}");
-                    idsToDelete.Add(id);
-                }
-            }
-
-            if (idsToDelete.Any())
-            {
-                await DeleteBulkAsync(idsToDelete);
-            }
-
-            // Verify cleanup
-            using var verifyIterator = _container.GetItemQueryIterator<dynamic>(query);
-            if (verifyIterator.HasMoreResults)
-            {
-                var verifyResponse = await verifyIterator.ReadNextAsync();
-                if (verifyResponse.Any())
-                {
-                    foreach (var item in verifyResponse)
+                    var response = await iterator.ReadNextAsync();
+                    foreach (var item in response)
                     {
-                        Console.WriteLine($"Remaining item after cleanup: {item.id}");
+                        var id = (string)item.id;
+                        idsToDelete.Add(id);
                     }
-                    throw new Exception("Cleanup failed: Items still exist in the container.");
                 }
+
+                if (!idsToDelete.Any())
+                {
+                    break;
+                }
+
+                await DeleteBulkAsync(idsToDelete);
             }
         }
 
@@ -102,6 +90,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
         [Fact]
         public async Task UpsertBulkAsync_ShouldStoreMultipleItems()
         {
+            // Ensure the container is empty before the test
+            await CleanupContainerAsync();
+
             var items = new List<Item>
             {
                 new Item { Id = Guid.NewGuid().ToString(), Content = "Item 1", LastModified = DateTime.UtcNow },
