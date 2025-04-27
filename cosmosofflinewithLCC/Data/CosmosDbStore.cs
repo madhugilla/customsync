@@ -75,5 +75,25 @@ namespace cosmosofflinewithLCC.Data
                 }
             }
         }
+
+        public async Task<List<T>> GetByUserIdAsync(string userId)
+        {
+            var items = new List<T>();
+
+            // Using parameterized query to avoid SQL injection
+            var queryText = "SELECT * FROM c WHERE c.userId = @userId";
+            var queryDefinition = new QueryDefinition(queryText)
+                .WithParameter("@userId", userId);
+
+            var query = _container.GetItemQueryIterator<T>(queryDefinition);
+
+            while (query.HasMoreResults)
+            {
+                var response = await query.ReadNextAsync();
+                items.AddRange(response);
+            }
+
+            return items;
+        }
     }
 }

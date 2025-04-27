@@ -20,11 +20,43 @@ namespace cosmosofflinewithLCC.Data
             _tableName = typeof(T).Name + "s";
             _idProp = typeof(T).GetProperty("Id") ?? throw new Exception("Model must have Id property");
             _lastModifiedProp = typeof(T).GetProperty("LastModified") ?? throw new Exception("Model must have LastModified property");
+
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             connection.Open();
             var tableCmd = connection.CreateCommand();
-            tableCmd.CommandText = $@"CREATE TABLE IF NOT EXISTS [{_tableName}] (Id TEXT PRIMARY KEY, Content TEXT, LastModified TEXT); CREATE TABLE IF NOT EXISTS PendingChanges_{_tableName} (Id TEXT PRIMARY KEY);";
-            tableCmd.ExecuteNonQuery();
+
+            // Update the table schema to include UserId column if it doesn't exist
+            tableCmd.CommandText = $@"
+                CREATE TABLE IF NOT EXISTS [{_tableName}] (
+                    Id TEXT PRIMARY KEY, 
+                    Content TEXT, 
+                    LastModified TEXT,
+                    UserId TEXT
+                ); 
+                CREATE TABLE IF NOT EXISTS PendingChanges_{_tableName} (Id TEXT PRIMARY KEY);
+                
+                -- Check if UserId column exists and add it if it doesn't
+                PRAGMA table_info([{_tableName}]);
+            ";
+
+            using var reader = tableCmd.ExecuteReader();
+            bool hasUserIdColumn = false;
+            while (reader.Read())
+            {
+                if (reader.GetString(1) == "UserId")
+                {
+                    hasUserIdColumn = true;
+                    break;
+                }
+            }
+            reader.Close();
+
+            if (!hasUserIdColumn)
+            {
+                var alterCmd = connection.CreateCommand();
+                alterCmd.CommandText = $"ALTER TABLE [{_tableName}] ADD COLUMN UserId TEXT;";
+                alterCmd.ExecuteNonQuery();
+            }
         }
         public async Task<T?> GetAsync(string id)
         {
@@ -117,6 +149,27 @@ namespace cosmosofflinewithLCC.Data
             cmd.CommandText = $"DELETE FROM PendingChanges_{_tableName} WHERE Id = @id";
             cmd.Parameters.AddWithValue("@id", id);
             await cmd.ExecuteNonQueryAsync();
+        }
+
+        public async Task<List<T>> GetByUserIdAsync(string userId)
+        {
+            var items = new List<T>();
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            // Parse the JSON to find records with matching userId
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = $"SELECT Content FROM [{_tableName}] WHERE json_extract(Content, '$.userId') = @userId";
+            cmd.Parameters.AddWithValue("@userId", userId);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var json = reader.GetString(0);
+                items.Add(System.Text.Json.JsonSerializer.Deserialize<T>(json)!);
+            }
+
+            return items;
         }
     }
 }
