@@ -108,21 +108,6 @@ Run the integration tests (requires the Cosmos DB Emulator to be running):
 dotnet test tests/cosmosofflinewithLCC.IntegrationTests
 ```
 
-## Best Practices Implemented
-
-- **Error Handling**: Comprehensive error logging
-- **Bulk Operations**: Batch processing for efficient synchronization
-- **Connection Pooling**: Optimized connection management
-- **Retry Logic**: Exponential backoff for transient failures
-- **Flexible Configuration**: Environment-based configuration
-
-## Security Considerations
-
-- Credentials are never hardcoded
-- Environment variables for sensitive information
-- In production, use Key Vault for storing secrets
-- Consider using Managed Identity in Azure deployments
-
 ## Limitations
 
 - Soft deletes not yet implemented (see TODO in SyncEngine)
