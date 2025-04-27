@@ -108,15 +108,6 @@ Run the integration tests (requires the Cosmos DB Emulator to be running):
 dotnet test tests/cosmosofflinewithLCC.IntegrationTests
 ```
 
-## Azure Cosmos DB Configuration
-
-When deploying to production, consider:
-
-1. **Authentication**: Use Managed Identity for Azure-hosted applications
-2. **Connection Mode**: Uses Gateway mode for compatibility behind proxies/firewalls
-3. **Consistency Level**: Session consistency provides a good balance of performance and consistency
-4. **Request Units**: Configure based on expected throughput needs
-
 ## Best Practices Implemented
 
 - **Error Handling**: Comprehensive error logging
