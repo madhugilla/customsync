@@ -1,0 +1,14 @@
+{
+    "cSpell.words": [
+        "cosmosofflinewith",
+        "Newtonsoft"
+    ],
+    "omnisharp.enableRoslynAnalyzers": true,
+    "omnisharp.enableEditorConfigSupport": true,
+    "dotnet.defaultSolution": "New folder.sln",
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "always"
+    }
+}

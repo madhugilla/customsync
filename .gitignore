@@ -10,7 +10,6 @@ obj/
 *.log
 *.user
 *.vs
-*.vscode
 
 # Ignore test results
 TestResults/

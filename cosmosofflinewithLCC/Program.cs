@@ -18,15 +18,22 @@ namespace cosmosofflinewithLCC
             var host = Host.CreateDefaultBuilder(args)
                 .ConfigureServices((context, services) =>
                 {
-                    // Configuration (replace with your actual values or use a config file)
-                    string cosmosEndpoint = "<COSMOS_ENDPOINT>"; // e.g., https://your-account.documents.azure.com:443/
-                    string cosmosKey = "<COSMOS_KEY>";
+                    // Configuration from environment variables or fallback to Cosmos DB Emulator defaults
+                    string cosmosEndpoint = Environment.GetEnvironmentVariable("COSMOS_ENDPOINT") ?? "https://localhost:8081/";
+                    string cosmosKey = Environment.GetEnvironmentVariable("COSMOS_KEY") ?? "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==";
                     string databaseId = "AppDb";
                     string containerId = "Items";
                     string sqlitePath = "local.db";
 
                     // Register CosmosClient and container for Item
-                    services.AddSingleton(_ => new CosmosClient(cosmosEndpoint, cosmosKey));
+                    services.AddSingleton(_ => new CosmosClient(cosmosEndpoint, cosmosKey, new CosmosClientOptions
+                    {
+                        ConnectionMode = ConnectionMode.Gateway,
+                        SerializerOptions = new CosmosSerializationOptions
+                        {
+                            PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+                        }
+                    }));
                     services.AddSingleton(async provider =>
                     {
                         var client = provider.GetRequiredService<CosmosClient>();

@@ -1,0 +1,73 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/cosmosofflinewithLCC/cosmosofflinewithLCC.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "publish",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "publish",
+                "${workspaceFolder}/New folder.sln",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "test",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "test",
+                "${workspaceFolder}/New folder.sln",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Start Cosmos DB Emulator",
+            "type": "process",
+            "command": "C:\\Program Files\\Azure Cosmos DB Emulator\\CosmosDB.Emulator.exe",
+            "args": [
+                "/NoUI",
+                "/NoExplorer",
+                "/AllowNetworkAccess",
+                "/Key=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw=="
+            ],
+            "problemMatcher": [],
+            "isBackground": true
+        },
+        {
+            "label": "Stop Cosmos DB Emulator",
+            "type": "process",
+            "command": "taskkill",
+            "args": [
+                "/F",
+                "/IM",
+                "CosmosDB.Emulator.exe"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}
