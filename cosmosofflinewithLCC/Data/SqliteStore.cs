@@ -58,13 +58,33 @@ namespace cosmosofflinewithLCC.Data
                 alterCmd.ExecuteNonQuery();
             }
         }
-        public async Task<T?> GetAsync(string id)
+
+        /// <summary>
+        /// Gets a document by ID and userId (more efficient)
+        /// </summary>
+        /// <param name="id">The document ID</param>
+        /// <param name="userId">The user ID</param>
+        /// <returns>The retrieved document or null if not found</returns>
+        public async Task<T?> GetAsync(string id, string userId)
         {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty for efficient reads", nameof(userId));
+            }
+
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $"SELECT Content FROM [{_tableName}] WHERE Id = @id";
+
+            // Use both ID and userId for more efficient querying
+            cmd.CommandText = $@"SELECT Content FROM [{_tableName}] 
+                               WHERE Id = @id AND (
+                               json_extract(Content, '$.userId') = @userId 
+                               OR json_extract(Content, '$.UserId') = @userId)";
+
             cmd.Parameters.AddWithValue("@id", id);
+            cmd.Parameters.AddWithValue("@userId", userId);
+
             using var reader = await cmd.ExecuteReaderAsync();
             if (await reader.ReadAsync())
             {

@@ -17,10 +17,9 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-            var pendingItem = new Item { Id = "1", Content = "A", LastModified = now, UserId = _userId, Type = "Item" };
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc); var pendingItem = new Item { Id = "1", Content = "A", LastModified = now, UserId = _userId, Type = "Item" };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
-            remoteMock.Setup(x => x.GetAsync("1")).ReturnsAsync((Item?)null);
+            remoteMock.Setup(x => x.GetAsync("1", _userId)).ReturnsAsync((Item?)null);
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item> { pendingItem });
 
             // Act
@@ -32,10 +31,9 @@ namespace cosmosofflinewithLCC.Tests
                         i.Content == pendingItem.Content &&
                         i.LastModified == now &&
                         i.UserId == _userId &&
-                        i.Type == "Item"))), Times.Once);
-            localMock.Verify(x => x.RemovePendingChangeAsync("1"), Times.Once);
+                        i.Type == "Item"))), Times.Once); localMock.Verify(x => x.RemovePendingChangeAsync("1"), Times.Once);
             localMock.Verify(x => x.GetPendingChangesAsync(), Times.Once);
-            remoteMock.Verify(x => x.GetAsync("1"), Times.Once);
+            remoteMock.Verify(x => x.GetAsync("1", _userId), Times.Once);
         }
 
         [Fact]
@@ -44,11 +42,10 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-            var pendingItem = new Item { Id = "2", Content = "B", LastModified = now, UserId = _userId, Type = "Item" };
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc); var pendingItem = new Item { Id = "2", Content = "B", LastModified = now, UserId = _userId, Type = "Item" };
             var remoteItem = new Item { Id = "2", Content = "Old", LastModified = now.AddMinutes(-1), UserId = _userId, Type = "Item" };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
-            remoteMock.Setup(x => x.GetAsync("2")).ReturnsAsync(remoteItem);
+            remoteMock.Setup(x => x.GetAsync("2", _userId)).ReturnsAsync(remoteItem);
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item>()); // Prevent the pull logic from affecting the test
 
             // Act
@@ -70,11 +67,10 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-            var pendingItem = new Item { Id = "3", Content = "C", LastModified = now.AddMinutes(-2), UserId = _userId, Type = "Item" };
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc); var pendingItem = new Item { Id = "3", Content = "C", LastModified = now.AddMinutes(-2), UserId = _userId, Type = "Item" };
             var remoteItem = new Item { Id = "3", Content = "Newer", LastModified = now, UserId = _userId, Type = "Item" };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
-            remoteMock.Setup(x => x.GetAsync("3")).ReturnsAsync(remoteItem);
+            remoteMock.Setup(x => x.GetAsync("3", _userId)).ReturnsAsync(remoteItem);
 
             var remoteItems = new List<Item> { remoteItem };
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(remoteItems);
@@ -93,12 +89,11 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-            var remoteItem = new Item { Id = "4", Content = "Remote", LastModified = now, UserId = _userId, Type = "Item" };
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc); var remoteItem = new Item { Id = "4", Content = "Remote", LastModified = now, UserId = _userId, Type = "Item" };
             var localItem = new Item { Id = "4", Content = "Old", LastModified = now.AddMinutes(-1), UserId = _userId, Type = "Item" };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item> { remoteItem });
-            localMock.Setup(x => x.GetAsync("4")).ReturnsAsync(localItem);
+            localMock.Setup(x => x.GetAsync("4", _userId)).ReturnsAsync(localItem);
 
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified, _userId);
@@ -118,11 +113,10 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-            var remoteItem = new Item { Id = "5", Content = "RemoteOnly", LastModified = now, UserId = _userId, Type = "Item" };
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc); var remoteItem = new Item { Id = "5", Content = "RemoteOnly", LastModified = now, UserId = _userId, Type = "Item" };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item> { remoteItem });
-            localMock.Setup(x => x.GetAsync("5")).ReturnsAsync((Item?)null);
+            localMock.Setup(x => x.GetAsync("5", _userId)).ReturnsAsync((Item?)null);
 
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified, _userId);
@@ -142,12 +136,11 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-            var remoteItem = new Item { Id = "6", Content = "OldRemote", LastModified = now.AddMinutes(-2), UserId = _userId, Type = "Item" };
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc); var remoteItem = new Item { Id = "6", Content = "OldRemote", LastModified = now.AddMinutes(-2), UserId = _userId, Type = "Item" };
             var localItem = new Item { Id = "6", Content = "NewerLocal", LastModified = now, UserId = _userId, Type = "Item" };
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item> { remoteItem });
-            localMock.Setup(x => x.GetAsync("6")).ReturnsAsync(localItem);
+            localMock.Setup(x => x.GetAsync("6", _userId)).ReturnsAsync(localItem);
 
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified, _userId);
@@ -162,16 +155,14 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-
-            // Create items for multiple users
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);            // Create items for multiple users
             var user1Item = new Item { Id = "7", Content = "User1Data", LastModified = now, UserId = "user1", Type = "Item" };
             var user2Item = new Item { Id = "8", Content = "User2Data", LastModified = now, UserId = "user2", Type = "Item" };
 
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item>());
             remoteMock.Setup(x => x.GetByUserIdAsync("user1")).ReturnsAsync(new List<Item> { user1Item });
-            localMock.Setup(x => x.GetAsync("7")).ReturnsAsync((Item?)null);
-            localMock.Setup(x => x.GetAsync("8")).ReturnsAsync((Item?)null);
+            localMock.Setup(x => x.GetAsync("7", "user1")).ReturnsAsync((Item?)null);
+            localMock.Setup(x => x.GetAsync("8", "user2")).ReturnsAsync((Item?)null);
 
             // Act
             await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object, x => x.Id, x => x.LastModified, "user1");
@@ -191,15 +182,13 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-
-            // Item with a custom type and an item with no type
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);            // Item with a custom type and an item with no type
             var userItem = new Item { Id = "9", Content = "TypeTest", LastModified = now, UserId = _userId, Type = "CustomType" };
             var userItemNoType = new Item { Id = "10", Content = "NoTypeTest", LastModified = now, UserId = _userId, Type = null! };
 
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item> { userItem, userItemNoType });
-            localMock.Setup(x => x.GetAsync("9")).ReturnsAsync((Item?)null);
-            localMock.Setup(x => x.GetAsync("10")).ReturnsAsync((Item?)null);
+            localMock.Setup(x => x.GetAsync("9", _userId)).ReturnsAsync((Item?)null);
+            localMock.Setup(x => x.GetAsync("10", _userId)).ReturnsAsync((Item?)null);
 
             // Act - The docType parameter should be used for items that don't already have a type
             await SyncEngine.InitialUserDataPullAsync(localMock.Object, remoteMock.Object, _loggerMock.Object,
@@ -216,13 +205,11 @@ namespace cosmosofflinewithLCC.Tests
             // Arrange - Use IDocumentStore instead of CosmosDbStore for mocking
             var localMock = new Mock<IDocumentStore<Item>>();
             var remoteMock = new Mock<IDocumentStore<Item>>();
-            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);
-
-            // Item without a type
+            var now = new DateTime(2024, 4, 26, 12, 0, 0, DateTimeKind.Utc);            // Item without a type
             var pendingItem = new Item { Id = "11", Content = "NoType", LastModified = now, UserId = _userId, Type = null! };
 
             localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { pendingItem });
-            remoteMock.Setup(x => x.GetAsync("11")).ReturnsAsync((Item?)null);
+            remoteMock.Setup(x => x.GetAsync("11", _userId)).ReturnsAsync((Item?)null);
             remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item>());
 
             // Act

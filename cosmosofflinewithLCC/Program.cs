@@ -114,14 +114,12 @@ namespace cosmosofflinewithLCC
                 UserId = currentUserId,
                 Type = "Item"
             };
-            await remoteStore.UpsertAsync(remoteItem);
-
-            // Sync for Item - passing the current user ID to filter data
+            await remoteStore.UpsertAsync(remoteItem);            // Sync for Item - passing the current user ID to filter data
             await SyncEngine.SyncAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
 
             // Result for Item
-            var syncedRemote = await remoteStore.GetAsync("1");
-            var syncedLocal = await localStore.GetAsync("1");
+            var syncedRemote = await remoteStore.GetAsync("1", currentUserId);
+            var syncedLocal = await localStore.GetAsync("1", currentUserId);
             Console.WriteLine($"Remote Content: {syncedRemote?.Content}");
             Console.WriteLine($"Local Content: {syncedLocal?.Content}");
 

@@ -17,19 +17,19 @@ namespace cosmosofflinewithLCC.IntegrationTests
             _dbPath = Path.Combine(Path.GetTempPath(), $"testdb_{Guid.NewGuid()}.sqlite");
             Console.WriteLine($"Database Path: {_dbPath}");
         }
-
         [Fact]
         public async Task UpsertAndGetAsync_ShouldStoreAndRetrieveItem()
         {
             var store = new SqliteStore<Item>(_dbPath);
-            var item = new Item { Id = "1", Content = "Test Item", LastModified = DateTime.UtcNow };
+            var item = new Item { Id = "1", Content = "Test Item", LastModified = DateTime.UtcNow, UserId = "testUser" };
 
             await store.UpsertAsync(item);
-            var retrievedItem = await store.GetAsync("1");
+            var retrievedItem = await store.GetAsync("1", "testUser");
 
             Assert.NotNull(retrievedItem);
             Assert.Equal(item.Id, retrievedItem.Id);
             Assert.Equal(item.Content, retrievedItem.Content);
+            Assert.Equal(item.UserId, retrievedItem.UserId);
         }
 
         [Fact]

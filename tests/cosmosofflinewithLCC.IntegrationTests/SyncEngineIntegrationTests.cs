@@ -164,8 +164,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
 
             // Assert
-            Console.WriteLine($"Checking remote store for item with ID test1");
-            var remoteItem = await _remoteStore.GetAsync("test1");
+            Console.WriteLine($"Checking remote store for item with ID test1"); var remoteItem = await _remoteStore.GetAsync("test1", _testUserId);
             Assert.NotNull(remoteItem);
             Assert.Equal(localItem.Content, remoteItem.Content);
             Assert.Equal(_testUserId, remoteItem.UserId);
@@ -194,10 +193,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await _remoteStore.UpsertAsync(remoteItem);
 
             // Act - Make sure to pass the userId parameter
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
-
-            // Assert - Verify item was synced from remote to local
-            var localItem = await _localStore.GetAsync("test2");
+            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);            // Assert - Verify item was synced from remote to local
+            var localItem = await _localStore.GetAsync("test2", _testUserId);
             Assert.NotNull(localItem);
             Assert.Equal(remoteItem.Content, localItem.Content);
             Assert.Equal(_testUserId, localItem.UserId);
@@ -234,10 +231,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await _localStore.UpsertAsync(localItem);
 
             // Act
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
-
-            // Assert - Remote should be updated with local content since local is newer
-            var updatedRemoteItem = await _remoteStore.GetAsync("test3");
+            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);            // Assert - Remote should be updated with local content since local is newer
+            var updatedRemoteItem = await _remoteStore.GetAsync("test3", _testUserId);
             Assert.NotNull(updatedRemoteItem);
             Assert.Equal(localItem.Content, updatedRemoteItem.Content);
             Assert.Equal(localItem.LastModified, updatedRemoteItem.LastModified);
@@ -299,37 +294,29 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Wait briefly to ensure sync completes
             await Task.Delay(500);
 
-            // Assert
-
-            // Local items should be in remote
+            // Assert            // Local items should be in remote
             foreach (var item in localItems)
             {
-                var remoteItem = await _remoteStore.GetAsync(item.Id);
+                var remoteItem = await _remoteStore.GetAsync(item.Id, _testUserId);
                 Assert.NotNull(remoteItem);
                 Assert.Equal(item.Content, remoteItem.Content);
                 Assert.Equal(_testUserId, remoteItem.UserId);
                 Assert.Equal("Item", remoteItem.Type); // Verify Type property is set
-            }
-
-            // Remote items should be in local
+            }            // Remote items should be in local
             foreach (var item in remoteItems)
             {
-                var localItem = await _localStore.GetAsync(item.Id);
+                var localItem = await _localStore.GetAsync(item.Id, _testUserId);
                 Assert.NotNull(localItem);
                 Assert.Equal(item.Content, localItem.Content);
                 Assert.Equal(_testUserId, localItem.UserId);
                 Assert.Equal("Item", localItem.Type); // Verify Type property is set
-            }
-
-            // Local newer should win conflict
-            var resolvedConflict1Remote = await _remoteStore.GetAsync("conflict1");
+            }            // Local newer should win conflict
+            var resolvedConflict1Remote = await _remoteStore.GetAsync("conflict1", _testUserId);
             Assert.NotNull(resolvedConflict1Remote);
             Assert.Equal(localNewerItem.Content, resolvedConflict1Remote.Content);
             Assert.Equal(_testUserId, resolvedConflict1Remote.UserId);
-            Assert.Equal("Item", resolvedConflict1Remote.Type); // Verify Type property is set
-
-            // Remote newer should win conflict
-            var resolvedConflict2Local = await _localStore.GetAsync("conflict2");
+            Assert.Equal("Item", resolvedConflict1Remote.Type); // Verify Type property is set            // Remote newer should win conflict
+            var resolvedConflict2Local = await _localStore.GetAsync("conflict2", _testUserId);
             Assert.NotNull(resolvedConflict2Local);
             Assert.Equal(remoteNewerItem.Content, resolvedConflict2Local.Content);
             Assert.Equal(_testUserId, resolvedConflict2Local.UserId);
@@ -406,10 +393,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Wait briefly to ensure sync completes
             await Task.Delay(500);
 
-            // Assert
-            // Should only have user1's item in local store
-            var localUser1Item = await _localStore.GetAsync("user1Item");
-            var localUser2Item = await _localStore.GetAsync("user2Item");
+            // Assert            // Should only have user1's item in local store
+            var localUser1Item = await _localStore.GetAsync("user1Item", "user1");
+            var localUser2Item = await _localStore.GetAsync("user2Item", "user2");
 
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);
@@ -445,11 +431,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Wait briefly to ensure sync completes
             await Task.Delay(500);
 
-            // Assert
-            // Should have all user1's items but not user2's
-            var localUser1Item = await _localStore.GetAsync("initUser1Item");
-            var localUser2Item = await _localStore.GetAsync("initUser2Item");
-            var localUser1ItemDiffType = await _localStore.GetAsync("initUser1ItemOrder");
+            // Assert            // Should have all user1's items but not user2's
+            var localUser1Item = await _localStore.GetAsync("initUser1Item", "user1");
+            var localUser2Item = await _localStore.GetAsync("initUser2Item", "user2");
+            var localUser1ItemDiffType = await _localStore.GetAsync("initUser1ItemOrder", "user1");
 
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);

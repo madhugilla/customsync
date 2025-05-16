@@ -27,29 +27,28 @@ namespace cosmosofflinewithLCC.Data
             {
                 throw new System.Exception("Model must have UserId property for partitioning");
             }
-        }
-
-        public async Task<T?> GetAsync(string id)
+        }        /// <summary>
+                 /// Gets a document by ID and userId (partition key)
+                 /// </summary>
+                 /// <param name="id">The document ID</param>
+                 /// <param name="userId">The user ID (partition key)</param>
+                 /// <returns>The retrieved document or null if not found</returns>
+        public async Task<T?> GetAsync(string id, string userId)
         {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty for efficient point reads", nameof(userId));
+            }
+
             try
             {
-                // For point reads with partition key, we need the userId, but we might not know it
-                // So we use a query approach that works for any partition key
-                var query = new QueryDefinition("SELECT * FROM c WHERE c.id = @id")
-                    .WithParameter("@id", id);
+                // Use a direct point read with the partition key for maximum efficiency
+                var response = await _container.ReadItemAsync<T>(
+                    id: id,
+                    partitionKey: new PartitionKey(userId)
+                );
 
-                var iterator = _container.GetItemQueryIterator<T>(query);
-
-                while (iterator.HasMoreResults)
-                {
-                    var response = await iterator.ReadNextAsync();
-                    if (response.Count > 0)
-                    {
-                        return response.FirstOrDefault();
-                    }
-                }
-
-                return null;
+                return response.Resource;
             }
             catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {

@@ -132,10 +132,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Act - Upsert the item
             Console.WriteLine($"Upserting document with ID: {item.Id} in partition: {item.UserId}");
-            await _store.UpsertAsync(item);
-
-            // Retrieve the item
-            var result = await _store.GetAsync(item.Id);
+            await _store.UpsertAsync(item);            // Retrieve the item using the efficient method with partition key
+            var result = await _store.GetAsync(item.Id, item.UserId);
 
             // Assert
             Assert.NotNull(result);
@@ -174,12 +172,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
             {
                 Console.WriteLine($"Upserting document with ID: {item.Id} in partition: {item.UserId}");
             }
-            await _store.UpsertBulkAsync(items);
-
-            // Assert
+            await _store.UpsertBulkAsync(items);            // Assert
             foreach (var expected in items)
             {
-                var result = await _store.GetAsync(expected.Id);
+                var result = await _store.GetAsync(expected.Id, expected.UserId);
                 Assert.NotNull(result);
                 Assert.Equal(expected.Id, result.Id);
                 Assert.Equal(expected.Content, result.Content);

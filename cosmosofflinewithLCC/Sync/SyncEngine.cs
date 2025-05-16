@@ -54,11 +54,9 @@ namespace cosmosofflinewithLCC.Sync
                 typeProp.SetValue(document, docType);
                 Console.WriteLine($"Set Type to {docType} for document");
             }
-        }
-
-        /// <summary>
-        /// Synchronizes data between local and remote stores for a specific user
-        /// </summary>
+        }        /// <summary>
+                 /// Synchronizes data between local and remote stores for a specific user
+                 /// </summary>
         public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId) where T : class, new()
         {
             if (string.IsNullOrEmpty(userId))
@@ -144,15 +142,15 @@ namespace cosmosofflinewithLCC.Sync
                     // Always ensure the userId and type are set for proper partitioning and querying
                     EnsureCosmosProperties(localChange, userId, docType);
                 }
-
                 var id = typeof(T).GetProperty(idPropName)?.GetValue(localChange)?.ToString();
                 if (string.IsNullOrEmpty(id))
                 {
                     logger.LogWarning("Item has null or empty ID and will be skipped");
                     continue;
-                }
+                }                // Always use efficient point read with partition key
+                logger.LogInformation("Using efficient point read with partition key for item {Id}", id);
+                var remoteItem = await remote.GetAsync(id, userId);
 
-                var remoteItem = await remote.GetAsync(id);
                 var localLast = typeof(T).GetProperty(lastModifiedPropName)?.GetValue(localChange) as DateTime?;
                 var remoteLast = remoteItem != null ? typeof(T).GetProperty(lastModifiedPropName)?.GetValue(remoteItem) as DateTime? : null;
 
@@ -217,10 +215,15 @@ namespace cosmosofflinewithLCC.Sync
 
             foreach (var remoteItem in remoteItems)
             {
-                if (remoteItem == null) continue;
+                if (remoteItem == null) continue; var id = typeof(T).GetProperty(idPropName)?.GetValue(remoteItem)?.ToString();
+                // Always use efficient point read with partition key
+                T? localItem = null;
+                if (id != null)
+                {
+                    logger.LogInformation("Using efficient point read with userId for local item {Id}", id);
+                    localItem = await local.GetAsync(id, userId);
+                }
 
-                var id = typeof(T).GetProperty(idPropName)?.GetValue(remoteItem)?.ToString();
-                var localItem = id != null ? await local.GetAsync(id) : null;
                 var remoteLast = typeof(T).GetProperty(lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
                 var localLast = localItem != null ? typeof(T).GetProperty(lastModifiedPropName)?.GetValue(localItem) as DateTime? : null;
 
@@ -242,11 +245,9 @@ namespace cosmosofflinewithLCC.Sync
             }
 
             return itemsPulled;
-        }
-
-        /// <summary>
-        /// Performs an initial data pull for a specific user without pushing any local changes
-        /// </summary>
+        }        /// <summary>
+                 /// Performs an initial data pull for a specific user without pushing any local changes
+                 /// </summary>
         public static async Task InitialUserDataPullAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger,
             Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression,
             string userId, string docType) where T : class, new()
