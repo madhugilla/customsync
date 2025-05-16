@@ -8,7 +8,7 @@ namespace cosmosofflinewithLCC.Sync
 {
     /// <summary>
     /// TODO: implement soft deletes
-    /// </summary>
+    /// </summary>\
     public static class SyncEngine
     {
         private static string GetPropertyName<T, TProperty>(Expression<Func<T, TProperty>> propertyExpression)
@@ -29,7 +29,7 @@ namespace cosmosofflinewithLCC.Sync
         /// <summary>
         /// Ensures a document has the required properties for Cosmos DB
         /// </summary>
-        private static void EnsureCosmosProperties<T>(T document, string userId, string? docType = null) where T : class, new()
+        private static void EnsureCosmosProperties<T>(T document, string userId, string docType) where T : class, new()
         {
             // Set the userId (partition key) if the property exists
             var userIdProp = typeof(T).GetProperty("UserId");
@@ -50,15 +50,9 @@ namespace cosmosofflinewithLCC.Sync
             var typeProp = typeof(T).GetProperty("Type");
             if (typeProp != null && typeProp.CanWrite)
             {
-                // Only set if not already set
-                var currentValue = typeProp.GetValue(document);
-                if (currentValue == null || string.IsNullOrEmpty(currentValue.ToString()))
-                {
-                    // If a specific docType is provided, use it, otherwise use the class name
-                    var typeValue = !string.IsNullOrEmpty(docType) ? docType : typeof(T).Name;
-                    typeProp.SetValue(document, typeValue);
-                    Console.WriteLine($"Set Type to {typeValue} for document");
-                }
+                // Set the type property to the provided document type
+                typeProp.SetValue(document, docType);
+                Console.WriteLine($"Set Type to {docType} for document");
             }
         }
 
@@ -135,8 +129,20 @@ namespace cosmosofflinewithLCC.Sync
                 // Ensure document has required Cosmos DB properties before sending to remote
                 if (remote is CosmosDbStore<T>)
                 {
-                    // Always ensure the userId is set for proper partitioning
-                    EnsureCosmosProperties(localChange, userId);
+                    // Get the existing type if available
+                    string docType = typeof(T).Name;
+                    var typeProp = typeof(T).GetProperty("Type");
+                    if (typeProp != null)
+                    {
+                        var currentTypeValue = typeProp.GetValue(localChange)?.ToString();
+                        if (!string.IsNullOrEmpty(currentTypeValue))
+                        {
+                            docType = currentTypeValue;
+                        }
+                    }
+
+                    // Always ensure the userId and type are set for proper partitioning and querying
+                    EnsureCosmosProperties(localChange, userId, docType);
                 }
 
                 var id = typeof(T).GetProperty(idPropName)?.GetValue(localChange)?.ToString();
@@ -162,17 +168,26 @@ namespace cosmosofflinewithLCC.Sync
 
                 idsToRemove.Add(id);
             }
-
             if (itemsToUpsert.Any())
             {
                 // Important: Ensure each item in the bulk operation has the correct partition key
                 foreach (var item in itemsToUpsert)
                 {
-                    var userIdProp = typeof(T).GetProperty("UserId");
-                    if (userIdProp != null)
+                    // Ensure all items in the bulk operation have the correct userId and type
+                    // Get the existing type if available
+                    string docType = typeof(T).Name;
+                    var typeProp = typeof(T).GetProperty("Type");
+                    if (typeProp != null)
                     {
-                        userIdProp.SetValue(item, userId);
+                        var currentTypeValue = typeProp.GetValue(item)?.ToString();
+                        if (!string.IsNullOrEmpty(currentTypeValue))
+                        {
+                            docType = currentTypeValue;
+                        }
                     }
+
+                    // Always ensure proper properties are set
+                    EnsureCosmosProperties(item, userId, docType);
                 }
 
                 await remote.UpsertBulkAsync(itemsToUpsert);
@@ -234,15 +249,19 @@ namespace cosmosofflinewithLCC.Sync
         /// </summary>
         public static async Task InitialUserDataPullAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger,
             Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression,
-            string userId, string? docType = null) where T : class, new()
+            string userId, string docType) where T : class, new()
         {
             if (string.IsNullOrEmpty(userId))
             {
                 throw new ArgumentException("userId must be provided for initial user data pull", nameof(userId));
             }
 
-            logger.LogInformation("Starting initial data pull for user {UserId} for type {Type}", userId,
-                !string.IsNullOrEmpty(docType) ? docType : typeof(T).Name);
+            if (string.IsNullOrEmpty(docType))
+            {
+                throw new ArgumentException("docType must be provided for initial data pull", nameof(docType));
+            }
+
+            logger.LogInformation("Starting initial data pull for user {UserId} for type {Type}", userId, docType);
 
             var idPropName = GetPropertyName(idExpression);
             var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
