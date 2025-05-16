@@ -62,12 +62,20 @@ namespace cosmosofflinewithLCC.Sync
             }
         }
 
-        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string? userId = null) where T : class, new()
+        /// <summary>
+        /// Synchronizes data between local and remote stores for a specific user
+        /// </summary>
+        public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId) where T : class, new()
         {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must be provided for sync operations", nameof(userId));
+            }
+
             var idPropName = GetPropertyName(idExpression);
             var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
 
-            logger.LogInformation("Starting sync process for type {Type}", typeof(T).Name);
+            logger.LogInformation("Starting sync process for type {Type} and user {UserId}", typeof(T).Name, userId);
             int itemsSkipped = 0;
             var stopwatch = Stopwatch.StartNew();
 
@@ -81,27 +89,26 @@ namespace cosmosofflinewithLCC.Sync
                 int itemsPulled = await PullRemoteChanges(local, remote, logger, idPropName, lastModifiedPropName, userId);
 
                 stopwatch.Stop();
-                logger.LogInformation("Sync process completed successfully for type {Type} in {ElapsedMilliseconds} ms", typeof(T).Name, stopwatch.ElapsedMilliseconds);
+                logger.LogInformation("Sync process completed successfully for type {Type} and user {UserId} in {ElapsedMilliseconds} ms", typeof(T).Name, userId, stopwatch.ElapsedMilliseconds);
                 logger.LogInformation("Metrics: {ItemsPushed} items pushed, {ItemsPulled} items pulled, {ItemsSkipped} items skipped", itemsPushed, itemsPulled, itemsSkipped);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "An error occurred during the sync process for type {Type}", typeof(T).Name);
+                logger.LogError(ex, "An error occurred during the sync process for type {Type} and user {UserId}", typeof(T).Name, userId);
                 throw;
             }
         }
 
-        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string? userId = null) where T : class, new()
+        private static async Task<int> PushPendingChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string userId) where T : class, new()
         {
             int itemsPushed = 0;
 
-            // Get pending changes
+            // Get pending changes for the specific user
             List<T> pending;
 
-            if (userId != null && local is SqliteStore<T> sqliteStore)
+            if (local is SqliteStore<T> sqliteStore)
             {
-                // Use the optimized method for SqliteStore if we have a userId
-                // Since userId is mandatory, this will be more efficient than the general method
+                // Use the optimized method for SqliteStore
                 pending = await sqliteStore.GetPendingChangesForUserAsync(userId);
                 logger.LogInformation("Used optimized query to retrieve {Count} pending changes for user {UserId}", pending.Count, userId);
             }
@@ -110,16 +117,12 @@ namespace cosmosofflinewithLCC.Sync
                 // Fall back to standard method if we can't use the optimized path
                 pending = await local.GetPendingChangesAsync();
 
-                // If userId is provided, filter pending changes to only include those for the current user
-                // This is safe because userId is guaranteed to be present on all documents
-                if (userId != null)
-                {
-                    var userIdProp = typeof(T).GetProperty("UserId");
-                    pending = pending.Where(item =>
-                        userId.Equals(userIdProp?.GetValue(item)?.ToString(),
-                        StringComparison.OrdinalIgnoreCase)).ToList();
-                    logger.LogInformation("Filtered to {Count} pending changes for user {UserId}", pending.Count, userId);
-                }
+                // Filter pending changes to only include those for the current user
+                var userIdProp = typeof(T).GetProperty("UserId");
+                pending = pending.Where(item =>
+                    userId.Equals(userIdProp?.GetValue(item)?.ToString(),
+                    StringComparison.OrdinalIgnoreCase)).ToList();
+                logger.LogInformation("Filtered to {Count} pending changes for user {UserId}", pending.Count, userId);
             }
 
             logger.LogInformation("Found {Count} pending changes to push to remote", pending.Count);
@@ -130,7 +133,7 @@ namespace cosmosofflinewithLCC.Sync
             foreach (var localChange in pending)
             {
                 // Ensure document has required Cosmos DB properties before sending to remote
-                if (!string.IsNullOrEmpty(userId) && remote is CosmosDbStore<T>)
+                if (remote is CosmosDbStore<T>)
                 {
                     // Always ensure the userId is set for proper partitioning
                     EnsureCosmosProperties(localChange, userId);
@@ -165,13 +168,10 @@ namespace cosmosofflinewithLCC.Sync
                 // Important: Ensure each item in the bulk operation has the correct partition key
                 foreach (var item in itemsToUpsert)
                 {
-                    if (!string.IsNullOrEmpty(userId))
+                    var userIdProp = typeof(T).GetProperty("UserId");
+                    if (userIdProp != null)
                     {
-                        var userIdProp = typeof(T).GetProperty("UserId");
-                        if (userIdProp != null)
-                        {
-                            userIdProp.SetValue(item, userId);
-                        }
+                        userIdProp.SetValue(item, userId);
                     }
                 }
 
@@ -187,25 +187,14 @@ namespace cosmosofflinewithLCC.Sync
             return itemsPushed;
         }
 
-        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string? userId = null) where T : class, new()
+        private static async Task<int> PullRemoteChanges<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, string idPropName, string lastModifiedPropName, string userId) where T : class, new()
         {
             int itemsPulled = 0;
 
-            // Get all remote items, filtered by user if provided
-            List<T> remoteItems;
-
-            if (!string.IsNullOrEmpty(userId))
-            {
-                // Use user-specific query if userId is provided
-                remoteItems = await remote.GetByUserIdAsync(userId);
-                logger.LogInformation("Retrieved {Count} items for user {UserId} from remote store", remoteItems.Count, userId);
-            }
-            else
-            {
-                // No user ID provided, retrieve all items (not recommended for production)
-                remoteItems = await remote.GetAllAsync();
-                logger.LogWarning("No userId provided for filtering. Retrieved all {Count} items from remote store.", remoteItems.Count);
-            }
+            // Get remote items for the specific user
+            logger.LogInformation("Retrieving items for user {UserId} from remote store", userId);
+            var remoteItems = await remote.GetByUserIdAsync(userId);
+            logger.LogInformation("Retrieved {Count} items for user {UserId} from remote store", remoteItems.Count, userId);
 
             logger.LogInformation("Found {Count} items on remote to sync to local", remoteItems.Count);
 
