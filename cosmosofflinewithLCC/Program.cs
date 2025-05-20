@@ -130,29 +130,29 @@ namespace cosmosofflinewithLCC
             var syncedLocal = await localStore.GetAsync("1", currentUserId);
             Console.WriteLine($"Remote Content: {syncedRemote?.Content}");
             Console.WriteLine($"Local Content: {syncedLocal?.Content}");            // Demonstrate using another document type (Order) in the same container
-            // Register services for Order
-            var container = await host.Services.GetRequiredService<Func<Task<Container>>>().Invoke();
-            var orderLocalStore = new SqliteStore<Order>(sqlitePath);
-            var orderRemoteStore = new CosmosDbStore<Order>(container);
+            // // Register services for Order
+            // var container = await host.Services.GetRequiredService<Func<Task<Container>>>().Invoke();
+            // var orderLocalStore = new SqliteStore<Order>(sqlitePath);
+            // var orderRemoteStore = new CosmosDbStore<Order>(container);
 
-            // Create and sync an order
-            var order = new Order
-            {
-                Id = "order1",
-                Description = "Test order",
-                LastModified = DateTime.UtcNow,
-                UserId = currentUserId,
-                Type = "Order"
-            };
+            // // Create and sync an order
+            // var order = new Order
+            // {
+            //     Id = "order1",
+            //     Description = "Test order",
+            //     LastModified = DateTime.UtcNow,
+            //     UserId = currentUserId,
+            //     Type = "Order"
+            // };
 
-            await orderLocalStore.UpsertAsync(order);
+            // await orderLocalStore.UpsertAsync(order);
 
-            // Sync Order data - both Item and Order are in the same Cosmos container but with different partition keys
-            await SyncEngine.SyncAsync(orderLocalStore, orderRemoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
+            // // Sync Order data - both Item and Order are in the same Cosmos container but with different partition keys
+            // await SyncEngine.SyncAsync(orderLocalStore, orderRemoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
 
-            // Verify the order was synced
-            var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
-            Console.WriteLine($"Order Description: {syncedOrder?.Description}");
+            // // Verify the order was synced
+            // var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
+            // Console.WriteLine($"Order Description: {syncedOrder?.Description}");
         }
 
         private static async Task<bool> IsLocalDbEmpty<T>(IDocumentStore<T> localStore) where T : class, new()

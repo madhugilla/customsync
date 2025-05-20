@@ -24,17 +24,15 @@ namespace cosmosofflinewithLCC.Sync
 
             throw new ArgumentException("Invalid property expression. Ensure the expression is a simple property access, e.g., x => x.PropertyName.");
         }        /// <summary>
-                 /// Ensures a document has the required properties for Cosmos DB
+                 /// Ensures a document has the required common properties
                  /// </summary>
-        private static void EnsureCosmosProperties<T>(T document, string userId, string docType) where T : class, new()
+        private static void EnsureCommonProperties<T>(T document, string userId, string docType) where T : class, new()
         {
             // Set the userId if the property exists
             var userIdProp = typeof(T).GetProperty("UserId");
             if (userIdProp != null && userIdProp.CanWrite)
             {
-                // Always set the userId to match the provided value to ensure partition key consistency
                 userIdProp.SetValue(document, userId);
-                Console.WriteLine($"Set UserId to {userId} for document");
             }
             else
             {
@@ -45,13 +43,8 @@ namespace cosmosofflinewithLCC.Sync
             var typeProp = typeof(T).GetProperty("Type");
             if (typeProp != null && typeProp.CanWrite)
             {
-                // Set the type property to the provided document type
                 typeProp.SetValue(document, docType);
-                Console.WriteLine($"Set Type to {docType} for document");
             }
-
-            // Note: The partitionKey property is set in CosmosDbStore, not here
-            // The partition key will be created as userId:docType in CosmosDbStore
         }/// <summary>
          /// Synchronizes data between local and remote stores for a specific user
          /// </summary>
@@ -95,25 +88,23 @@ namespace cosmosofflinewithLCC.Sync
 
             // Get pending changes for the specific user
             List<T> pending;
-
             if (local is SqliteStore<T> sqliteStore)
             {
-                // Use the optimized method for SqliteStore
+                // Use SQLite's optimized method when available
                 pending = await sqliteStore.GetPendingChangesForUserAsync(userId);
-                logger.LogInformation("Used optimized query to retrieve {Count} pending changes for user {UserId}", pending.Count, userId);
             }
             else
             {
-                // Fall back to standard method if we can't use the optimized path
+                // Fallback for testing or other store implementations
                 pending = await local.GetPendingChangesAsync();
 
-                // Filter pending changes to only include those for the current user
+                // Filter by userId since we're not using the optimized method
                 var userIdProp = typeof(T).GetProperty("UserId");
                 pending = pending.Where(item =>
                     userId.Equals(userIdProp?.GetValue(item)?.ToString(),
                     StringComparison.OrdinalIgnoreCase)).ToList();
-                logger.LogInformation("Filtered to {Count} pending changes for user {UserId}", pending.Count, userId);
             }
+            logger.LogInformation("Retrieved {Count} pending changes for user {UserId}", pending.Count, userId);
 
             logger.LogInformation("Found {Count} pending changes to push to remote", pending.Count);
 
@@ -121,25 +112,18 @@ namespace cosmosofflinewithLCC.Sync
             var idsToRemove = new List<string>();
 
             foreach (var localChange in pending)
-            {
-                // Ensure document has required Cosmos DB properties before sending to remote
-                if (remote is CosmosDbStore<T>)
+            {                // Get the existing type if available
+                string docType = typeof(T).Name;
+                var typeProp = typeof(T).GetProperty("Type");
+                if (typeProp != null)
                 {
-                    // Get the existing type if available
-                    string docType = typeof(T).Name;
-                    var typeProp = typeof(T).GetProperty("Type");
-                    if (typeProp != null)
+                    var currentTypeValue = typeProp.GetValue(localChange)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
                     {
-                        var currentTypeValue = typeProp.GetValue(localChange)?.ToString();
-                        if (!string.IsNullOrEmpty(currentTypeValue))
-                        {
-                            docType = currentTypeValue;
-                        }
+                        docType = currentTypeValue;
                     }
-
-                    // Always ensure the userId and type are set for proper partitioning and querying
-                    EnsureCosmosProperties(localChange, userId, docType);
-                }
+                }                // Always ensure the userId and type are set for proper data consistency
+                EnsureCommonProperties(localChange, userId, docType);
                 var id = typeof(T).GetProperty(idPropName)?.GetValue(localChange)?.ToString();
                 if (string.IsNullOrEmpty(id))
                 {
@@ -180,10 +164,8 @@ namespace cosmosofflinewithLCC.Sync
                         {
                             docType = currentTypeValue;
                         }
-                    }
-
-                    // Always ensure proper properties are set
-                    EnsureCosmosProperties(item, userId, docType);
+                    }                    // Always ensure proper properties are set
+                    EnsureCommonProperties(item, userId, docType);
                 }
 
                 await remote.UpsertBulkAsync(itemsToUpsert);
@@ -304,7 +286,7 @@ namespace cosmosofflinewithLCC.Sync
                             typeValue = currentTypeValue;
                         }
                     }
-                    EnsureCosmosProperties(remoteItem, userId, typeValue);
+                    EnsureCommonProperties(remoteItem, userId, typeValue);
 
                     itemsToUpsert.Add(remoteItem);
                 }
