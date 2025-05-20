@@ -134,20 +134,20 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = Guid.NewGuid().ToString(),
                 Content = "Test Item",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item"
             };
 
             // Act
-            Console.WriteLine($"Upserting document with ID: {item.ID} in partition: {item.UserId}");
+            Console.WriteLine($"Upserting document with ID: {item.ID} in partition: {item.OIID}");
             await _store.UpsertAsync(item);
 
             // Assert
-            var result = await _store.GetAsync(item.ID, item.UserId);
+            var result = await _store.GetAsync(item.ID, item.OIID);
             Assert.NotNull(result);
             Assert.Equal(item.ID, result.ID);
             Assert.Equal(item.Content, result.Content);
-            Assert.Equal(_testUserId, result.UserId);
+            Assert.Equal(_testUserId, result.OIID);
             Assert.Equal(item.Type, result.Type);
         }
 
@@ -162,7 +162,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "Item 1",
                     LastModified = DateTime.UtcNow,
-                    UserId = _testUserId,
+                    OIID = _testUserId,
                     Type = "Item"
                 },
                 new Item
@@ -170,7 +170,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "Item 2",
                     LastModified = DateTime.UtcNow,
-                    UserId = _testUserId,
+                    OIID = _testUserId,
                     Type = "Item"
                 }
             };
@@ -178,16 +178,16 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Act
             foreach (var item in items)
             {
-                Console.WriteLine($"Upserting document with ID: {item.ID} in partition: {item.UserId}");
+                Console.WriteLine($"Upserting document with ID: {item.ID} in partition: {item.OIID}");
             }
             await _store.UpsertBulkAsync(items);            // Assert
             foreach (var expected in items)
             {
-                var result = await _store.GetAsync(expected.ID, expected.UserId);
+                var result = await _store.GetAsync(expected.ID, expected.OIID);
                 Assert.NotNull(result);
                 Assert.Equal(expected.ID, result.ID);
                 Assert.Equal(expected.Content, result.Content);
-                Assert.Equal(_testUserId, result.UserId);
+                Assert.Equal(_testUserId, result.OIID);
                 Assert.Equal("Item", result.Type);
             }
         }
@@ -203,7 +203,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "Item 1",
                     LastModified = DateTime.UtcNow,
-                    UserId = _testUserId,
+                    OIID = _testUserId,
                     Type = "Item"
                 },
                 new Item
@@ -211,14 +211,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "Item 2",
                     LastModified = DateTime.UtcNow,
-                    UserId = _testUserId,
+                    OIID = _testUserId,
                     Type = "Item"
                 }
             };
 
             foreach (var item in items)
             {
-                Console.WriteLine($"Upserting document with ID: {item.ID} in partition: {item.UserId}");
+                Console.WriteLine($"Upserting document with ID: {item.ID} in partition: {item.OIID}");
             }
             await _store.UpsertBulkAsync(items);
 
@@ -248,7 +248,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "User 1 Item 1",
                     LastModified = DateTime.UtcNow,
-                    UserId = user1Id,
+                    OIID = user1Id,
                     Type = "Item"
                 },
                 new Item
@@ -256,7 +256,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "User 1 Item 2",
                     LastModified = DateTime.UtcNow,
-                    UserId = user1Id,
+                    OIID = user1Id,
                     Type = "Item"
                 }
             };
@@ -268,7 +268,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "User 2 Item 1",
                     LastModified = DateTime.UtcNow,
-                    UserId = user2Id,
+                    OIID = user2Id,
                     Type = "Item"
                 },
                 new Item
@@ -276,7 +276,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = Guid.NewGuid().ToString(),
                     Content = "User 2 Item 2",
                     LastModified = DateTime.UtcNow,
-                    UserId = user2Id,
+                    OIID = user2Id,
                     Type = "Item"
                 }
             };
@@ -295,17 +295,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             foreach (var expected in user1Items)
             {
-                Assert.Contains(user1Results, r => r.ID == expected.ID && r.UserId == user1Id);
+                Assert.Contains(user1Results, r => r.ID == expected.ID && r.OIID == user1Id);
             }
 
             foreach (var expected in user2Items)
             {
-                Assert.Contains(user2Results, r => r.ID == expected.ID && r.UserId == user2Id);
+                Assert.Contains(user2Results, r => r.ID == expected.ID && r.OIID == user2Id);
             }
 
             // Verify that user1's items don't appear in user2's results and vice versa
-            Assert.DoesNotContain(user1Results, r => r.UserId == user2Id);
-            Assert.DoesNotContain(user2Results, r => r.UserId == user1Id);
+            Assert.DoesNotContain(user1Results, r => r.OIID == user2Id);
+            Assert.DoesNotContain(user2Results, r => r.OIID == user1Id);
         }
 
         [Fact]
@@ -329,7 +329,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = Guid.NewGuid().ToString(),
                 Content = "Composite partition key test",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item"
             };
 
@@ -338,13 +338,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await _store.UpsertAsync(item);
 
             // Retrieve the item using the user ID (which should work with the composite partition key)
-            var result = await _store.GetAsync(item.ID, item.UserId);
+            var result = await _store.GetAsync(item.ID, item.OIID);
 
             // Assert
             Assert.NotNull(result);
             Assert.Equal(item.ID, result.ID);
             Assert.Equal(item.Content, result.Content);
-            Assert.Equal(item.UserId, result.UserId);
+            Assert.Equal(item.OIID, result.OIID);
         }
 
         [Fact]
@@ -359,7 +359,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = Guid.NewGuid().ToString(),
                 Content = "Item content",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item"
             };
 
@@ -368,7 +368,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = Guid.NewGuid().ToString(),
                 Description = "Test Order",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Order"
             };
 
@@ -398,7 +398,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = Guid.NewGuid().ToString(),
                 Content = "Item without explicit type",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = null! // This will cause the store to fall back to the class name
             };
 
@@ -407,11 +407,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await _store.UpsertAsync(item);
 
             // Assert
-            var result = await _store.GetAsync(item.ID, item.UserId);
+            var result = await _store.GetAsync(item.ID, item.OIID);
             Assert.NotNull(result);
             Assert.Equal(item.ID, result.ID);
             Assert.Equal(item.Content, result.Content);
-            Assert.Equal(_testUserId, result.UserId);
+            Assert.Equal(_testUserId, result.OIID);
         }
     }
 }

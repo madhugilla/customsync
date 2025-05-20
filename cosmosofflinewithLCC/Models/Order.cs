@@ -8,8 +8,9 @@ namespace cosmosofflinewithLCC.Models
         public string ID { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public DateTime LastModified { get; set; }
-
-        public string UserId { get; set; } = string.Empty;
+        [JsonPropertyName("oiid")]
+        public string OIID { get; set; } = string.Empty;
+        [JsonPropertyName("type")]
         public string Type { get; set; } = "Order";
 
     }

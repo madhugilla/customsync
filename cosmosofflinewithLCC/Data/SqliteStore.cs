@@ -20,25 +20,34 @@ namespace cosmosofflinewithLCC.Data
 
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             connection.Open();
-            var tableCmd = connection.CreateCommand();            // Update the table schema to include UserId column if it doesn't exist
-            tableCmd.CommandText = $"CREATE TABLE IF NOT EXISTS [{_tableName}] (ID TEXT PRIMARY KEY, Content TEXT, LastModified TEXT, UserId TEXT); CREATE TABLE IF NOT EXISTS PendingChanges_{_tableName} (ID TEXT PRIMARY KEY); PRAGMA table_info([{_tableName}]);";
 
+            var tableCmd = connection.CreateCommand();
+            // Create the main table
+            tableCmd.CommandText = $"CREATE TABLE IF NOT EXISTS [{_tableName}] (ID TEXT PRIMARY KEY, Content TEXT, LastModified TEXT, OIID TEXT)";
+            tableCmd.ExecuteNonQuery();
+
+            // Create the pending changes table
+            tableCmd.CommandText = $"CREATE TABLE IF NOT EXISTS PendingChanges_{_tableName} (ID TEXT PRIMARY KEY)";
+            tableCmd.ExecuteNonQuery();
+
+            // Check table info
+            tableCmd.CommandText = $"PRAGMA table_info([{_tableName}])";
             using var reader = tableCmd.ExecuteReader();
-            bool hasUserIdColumn = false;
+            bool hasOIIDColumn = false;
             while (reader.Read())
             {
-                if (reader.GetString(1) == "UserId")
+                if (reader.GetString(1) == "OIID")
                 {
-                    hasUserIdColumn = true;
+                    hasOIIDColumn = true;
                     break;
                 }
             }
             reader.Close();
 
-            if (!hasUserIdColumn)
+            if (!hasOIIDColumn)
             {
                 var alterCmd = connection.CreateCommand();
-                alterCmd.CommandText = $"ALTER TABLE [{_tableName}] ADD COLUMN UserId TEXT;";
+                alterCmd.CommandText = $"ALTER TABLE [{_tableName}] ADD COLUMN OIID TEXT;";
                 alterCmd.ExecuteNonQuery();
             }
         }
@@ -59,7 +68,7 @@ namespace cosmosofflinewithLCC.Data
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();            // Use both ID and userId for more efficient querying
-            cmd.CommandText = $"SELECT Content FROM [{_tableName}] WHERE ID = @id AND (json_extract(Content, '$.userId') = @userId OR json_extract(Content, '$.UserId') = @userId)";
+            cmd.CommandText = $"SELECT Content FROM [{_tableName}] WHERE ID = @id AND (json_extract(Content, '$.oiid') = @userId OR json_extract(Content, '$.OIID') = @userId)";
 
             cmd.Parameters.AddWithValue("@id", id);
             cmd.Parameters.AddWithValue("@userId", userId);
@@ -75,11 +84,9 @@ namespace cosmosofflinewithLCC.Data
         public async Task UpsertAsync(T document)
         {
             var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
-            var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
-
-            // Extract the UserId for SQL indexing
+            var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");            // Extract the OIID for SQL indexing
             string? userId = null;
-            var userIdProp = typeof(T).GetProperty("UserId");
+            var userIdProp = typeof(T).GetProperty("OIID");
             if (userIdProp != null)
             {
                 userId = userIdProp.GetValue(document)?.ToString();
@@ -89,12 +96,12 @@ namespace cosmosofflinewithLCC.Data
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, UserId) 
+            cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, OIID) 
                                VALUES (@id, @content, @lastModified, @userId) 
                                ON CONFLICT(ID) DO UPDATE SET 
                                Content = @content, 
                                LastModified = @lastModified,
-                               UserId = @userId; 
+                               OIID = @userId;
                                
                                INSERT OR IGNORE INTO PendingChanges_{_tableName} (ID) VALUES (@id);";
             cmd.Parameters.AddWithValue("@id", id);
@@ -112,11 +119,9 @@ namespace cosmosofflinewithLCC.Data
             foreach (var document in documents)
             {
                 var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
-                var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
-
-                // Extract the UserId for SQL indexing
+                var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");                // Extract the OIID for SQL indexing
                 string? userId = null;
-                var userIdProp = typeof(T).GetProperty("UserId");
+                var userIdProp = typeof(T).GetProperty("OIID");
                 if (userIdProp != null)
                 {
                     userId = userIdProp.GetValue(document)?.ToString();
@@ -125,12 +130,12 @@ namespace cosmosofflinewithLCC.Data
                 var json = System.Text.Json.JsonSerializer.Serialize(document);
 
                 var cmd = connection.CreateCommand();
-                cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, UserId) 
+                cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, OIID) 
                                     VALUES (@id, @content, @lastModified, @userId) 
                                     ON CONFLICT(ID) DO UPDATE SET 
                                     Content = @content, 
                                     LastModified = @lastModified,
-                                    UserId = @userId; 
+                                    OIID = @userId;
                                     
                                     INSERT OR IGNORE INTO PendingChanges_{_tableName} (ID) VALUES (@id);";
                 cmd.Parameters.AddWithValue("@id", id);
@@ -200,9 +205,8 @@ namespace cosmosofflinewithLCC.Data
 
             // Try both camelCase and PascalCase property names for maximum compatibility
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $@"SELECT Content FROM [{_tableName}] 
-                                WHERE json_extract(Content, '$.userId') = @userId 
-                                OR json_extract(Content, '$.UserId') = @userId";
+            cmd.CommandText = $@"SELECT Content FROM [{_tableName}]                                WHERE json_extract(Content, '$.oiid') = @userId 
+                                OR json_extract(Content, '$.OIID') = @userId";
             cmd.Parameters.AddWithValue("@userId", userId);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -234,12 +238,11 @@ namespace cosmosofflinewithLCC.Data
             // Optimize the query by directly filtering on the UserId field
             // This is more efficient than the general query with a WHERE clause on IsPendingChange
             // Since userId is mandatory, we can use an indexable query pattern
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = $@"SELECT i.Content FROM [{_tableName}] i 
+            var cmd = connection.CreateCommand(); cmd.CommandText = $@"SELECT i.Content FROM [{_tableName}] i 
                        JOIN PendingChanges_{_tableName} p 
                        ON i.Id = p.Id 
-                       WHERE json_extract(i.Content, '$.userId') = @userId 
-                       OR json_extract(i.Content, '$.UserId') = @userId";
+                       WHERE json_extract(i.Content, '$.oiid') = @userId 
+                       OR json_extract(i.Content, '$.OIID') = @userId";
             cmd.Parameters.AddWithValue("@userId", userId);
 
             using var reader = await cmd.ExecuteReaderAsync();

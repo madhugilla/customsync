@@ -145,7 +145,7 @@ namespace cosmosofflinewithLCC
                 ID = "1",
                 Content = "Local version",
                 LastModified = DateTime.UtcNow,
-                UserId = currentUserId,
+                OIID = currentUserId,
                 Type = "Item"
             };
             await localStore.UpsertAsync(item);
@@ -156,7 +156,7 @@ namespace cosmosofflinewithLCC
                 ID = "1",
                 Content = "Remote version",
                 LastModified = DateTime.UtcNow.AddMinutes(-10),
-                UserId = currentUserId,
+                OIID = currentUserId,
                 Type = "Item"
             };
             await remoteStore.UpsertAsync(remoteItem);
@@ -180,7 +180,7 @@ namespace cosmosofflinewithLCC
                 ID = "order1",
                 Description = "Test order",
                 LastModified = DateTime.UtcNow,
-                UserId = currentUserId,
+                OIID = currentUserId,
                 Type = "Order"
             };
 

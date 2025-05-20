@@ -16,7 +16,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         public async Task UpsertAndGetAsync_ShouldStoreAndRetrieveItem()
         {
             var store = new SqliteStore<Item>(_dbPath);
-            var item = new Item { ID = "1", Content = "Test Item", LastModified = DateTime.UtcNow, UserId = "testUser" };
+            var item = new Item { ID = "1", Content = "Test Item", LastModified = DateTime.UtcNow, OIID = "testUser" };
 
             await store.UpsertAsync(item);
             var retrievedItem = await store.GetAsync("1", "testUser");
@@ -24,7 +24,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.NotNull(retrievedItem);
             Assert.Equal(item.ID, retrievedItem.ID);
             Assert.Equal(item.Content, retrievedItem.Content);
-            Assert.Equal(item.UserId, retrievedItem.UserId);
+            Assert.Equal(item.OIID, retrievedItem.OIID);
         }
 
         [Fact]
@@ -85,7 +85,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "user1_item",
                 Content = "User 1 content",
                 LastModified = DateTime.UtcNow,
-                UserId = user1,
+                OIID = user1,
                 Type = "Item"
             };
 
@@ -94,7 +94,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "user2_item",
                 Content = "User 2 content",
                 LastModified = DateTime.UtcNow,
-                UserId = user2,
+                OIID = user2,
                 Type = "Item"
             };
 
@@ -103,7 +103,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "user1_order",
                 Description = "User 1 order",
                 LastModified = DateTime.UtcNow,
-                UserId = user1,
+                OIID = user1,
                 Type = "Order"
             };
 
@@ -143,7 +143,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "pending1",
                 Content = "Pending User 1",
                 LastModified = DateTime.UtcNow,
-                UserId = user1,
+                OIID = user1,
                 Type = "Item"
             };
 
@@ -152,7 +152,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "pending2",
                 Content = "Pending User 2",
                 LastModified = DateTime.UtcNow,
-                UserId = user2,
+                OIID = user2,
                 Type = "Item"
             };
 
@@ -167,11 +167,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Verify results
             Assert.Single(user1Pending);
             Assert.Equal("pending1", user1Pending[0].ID);
-            Assert.Equal(user1, user1Pending[0].UserId);
+            Assert.Equal(user1, user1Pending[0].OIID);
 
             Assert.Single(user2Pending);
             Assert.Equal("pending2", user2Pending[0].ID);
-            Assert.Equal(user2, user2Pending[0].UserId);
+            Assert.Equal(user2, user2Pending[0].OIID);
         }
     }
 }

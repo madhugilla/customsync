@@ -164,7 +164,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "test1",
                 Content = "Local content",
                 LastModified = now,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item" // Add Type property
             };
 
@@ -182,7 +182,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var remoteItem = await _remoteStore.GetAsync("test1", _testUserId);
             Assert.NotNull(remoteItem);
             Assert.Equal(localItem.Content, remoteItem.Content);
-            Assert.Equal(_testUserId, remoteItem.UserId);
+            Assert.Equal(_testUserId, remoteItem.OIID);
             Assert.Equal("Item", remoteItem.Type); // Verify Type property is set
 
             // Verify pending changes are removed after sync
@@ -200,7 +200,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "test2",
                 Content = "Remote content",
                 LastModified = now,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item" // Add Type property
             };
 
@@ -218,7 +218,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var localItem = await _localStore.GetAsync("test2", _testUserId);
             Assert.NotNull(localItem);
             Assert.Equal(remoteItem.Content, localItem.Content);
-            Assert.Equal(_testUserId, localItem.UserId);
+            Assert.Equal(_testUserId, localItem.OIID);
             Assert.Equal("Item", localItem.Type); // Verify Type property is set
         }
 
@@ -235,7 +235,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "test3",
                 Content = "Old remote content",
                 LastModified = oldTime,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item" // Add Type property
             };
             await _remoteStore.UpsertAsync(remoteItem);
@@ -246,7 +246,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "test3",
                 Content = "New local content",
                 LastModified = now,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item" // Add Type property
             };
             await _localStore.UpsertAsync(localItem);
@@ -262,7 +262,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.NotNull(updatedRemoteItem);
             Assert.Equal(localItem.Content, updatedRemoteItem.Content);
             Assert.Equal(localItem.LastModified, updatedRemoteItem.LastModified);
-            Assert.Equal(_testUserId, updatedRemoteItem.UserId);
+            Assert.Equal(_testUserId, updatedRemoteItem.OIID);
             Assert.Equal("Item", updatedRemoteItem.Type); // Verify Type property is set
         }
 
@@ -277,24 +277,24 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Items that should sync from local to remote
             var localItems = new List<Item>
             {
-                new Item { ID = "local1", Content = "Local item 1", LastModified = now, UserId = _testUserId, Type = "Item" },
-                new Item { ID = "local2", Content = "Local item 2", LastModified = now, UserId = _testUserId, Type = "Item" }
+                new Item { ID = "local1", Content = "Local item 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "local2", Content = "Local item 2", LastModified = now, OIID = _testUserId, Type = "Item" }
             };
 
             // Items that should sync from remote to local
             var remoteItems = new List<Item>
             {
-                new Item { ID = "remote1", Content = "Remote item 1", LastModified = now, UserId = _testUserId, Type = "Item" },
-                new Item { ID = "remote2", Content = "Remote item 2", LastModified = now, UserId = _testUserId, Type = "Item" }
+                new Item { ID = "remote1", Content = "Remote item 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "remote2", Content = "Remote item 2", LastModified = now, OIID = _testUserId, Type = "Item" }
             };
 
             // Conflict items - local is newer
-            var localNewerItem = new Item { ID = "conflict1", Content = "Local newer", LastModified = newerTime, UserId = _testUserId, Type = "Item" };
-            var remoteOlderItem = new Item { ID = "conflict1", Content = "Remote older", LastModified = oldTime, UserId = _testUserId, Type = "Item" };
+            var localNewerItem = new Item { ID = "conflict1", Content = "Local newer", LastModified = newerTime, OIID = _testUserId, Type = "Item" };
+            var remoteOlderItem = new Item { ID = "conflict1", Content = "Remote older", LastModified = oldTime, OIID = _testUserId, Type = "Item" };
 
             // Conflict items - remote is newer
-            var localOlderItem = new Item { ID = "conflict2", Content = "Local older", LastModified = oldTime, UserId = _testUserId, Type = "Item" };
-            var remoteNewerItem = new Item { ID = "conflict2", Content = "Remote newer", LastModified = newerTime, UserId = _testUserId, Type = "Item" };
+            var localOlderItem = new Item { ID = "conflict2", Content = "Local older", LastModified = oldTime, OIID = _testUserId, Type = "Item" };
+            var remoteNewerItem = new Item { ID = "conflict2", Content = "Remote newer", LastModified = newerTime, OIID = _testUserId, Type = "Item" };
 
             // Add all items to their respective stores
             foreach (var item in localItems)
@@ -327,7 +327,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 var remoteItem = await _remoteStore.GetAsync(item.ID, _testUserId);
                 Assert.NotNull(remoteItem);
                 Assert.Equal(item.Content, remoteItem.Content);
-                Assert.Equal(_testUserId, remoteItem.UserId);
+                Assert.Equal(_testUserId, remoteItem.OIID);
                 Assert.Equal("Item", remoteItem.Type); // Verify Type property is set
             }            // Remote items should be in local
             foreach (var item in remoteItems)
@@ -335,18 +335,18 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 var localItem = await _localStore.GetAsync(item.ID, _testUserId);
                 Assert.NotNull(localItem);
                 Assert.Equal(item.Content, localItem.Content);
-                Assert.Equal(_testUserId, localItem.UserId);
+                Assert.Equal(_testUserId, localItem.OIID);
                 Assert.Equal("Item", localItem.Type); // Verify Type property is set
             }            // Local newer should win conflict
             var resolvedConflict1Remote = await _remoteStore.GetAsync("conflict1", _testUserId);
             Assert.NotNull(resolvedConflict1Remote);
             Assert.Equal(localNewerItem.Content, resolvedConflict1Remote.Content);
-            Assert.Equal(_testUserId, resolvedConflict1Remote.UserId);
+            Assert.Equal(_testUserId, resolvedConflict1Remote.OIID);
             Assert.Equal("Item", resolvedConflict1Remote.Type); // Verify Type property is set            // Remote newer should win conflict
             var resolvedConflict2Local = await _localStore.GetAsync("conflict2", _testUserId);
             Assert.NotNull(resolvedConflict2Local);
             Assert.Equal(remoteNewerItem.Content, resolvedConflict2Local.Content);
-            Assert.Equal(_testUserId, resolvedConflict2Local.UserId);
+            Assert.Equal(_testUserId, resolvedConflict2Local.OIID);
             Assert.Equal("Item", resolvedConflict2Local.Type); // Verify Type property is set
         }
 
@@ -366,7 +366,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     ID = $"bulk{i}",
                     Content = $"Bulk content {i}",
                     LastModified = now.AddSeconds(i), // Each item has a slightly different time
-                    UserId = _testUserId,
+                    OIID = _testUserId,
                     Type = "Item" // Add Type property
                 });
             }
@@ -391,7 +391,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 var remoteItem = remoteItems.FirstOrDefault(i => i.ID == localItem.ID);
                 Assert.NotNull(remoteItem);
                 Assert.Equal(localItem.Content, remoteItem!.Content);
-                Assert.Equal(_testUserId, remoteItem.UserId);
+                Assert.Equal(_testUserId, remoteItem.OIID);
                 Assert.Equal("Item", remoteItem.Type); // Verify Type property is set
             }
 
@@ -407,8 +407,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var now = DateTime.UtcNow;
 
             // Create items for different users
-            var user1Item = new Item { ID = "user1Item", Content = "User 1 data", LastModified = now, UserId = "user1", Type = "Item" };
-            var user2Item = new Item { ID = "user2Item", Content = "User 2 data", LastModified = now, UserId = "user2", Type = "Item" };
+            var user1Item = new Item { ID = "user1Item", Content = "User 1 data", LastModified = now, OIID = "user1", Type = "Item" };
+            var user2Item = new Item { ID = "user2Item", Content = "User 2 data", LastModified = now, OIID = "user2", Type = "Item" };
 
             // Add both items to remote store
             await _remoteStore.UpsertAsync(user1Item);
@@ -430,7 +430,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);
-            Assert.Equal("user1", localUser1Item.UserId);
+            Assert.Equal("user1", localUser1Item.OIID);
             Assert.Equal("Item", localUser1Item.Type); // Verify Type property is set
 
             // User2's item should not be synced
@@ -444,9 +444,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var now = DateTime.UtcNow;
 
             // Create items for different users
-            var user1Item = new Item { ID = "initUser1Item", Content = "User 1 data", LastModified = now, UserId = "user1", Type = "Item" };
-            var user2Item = new Item { ID = "initUser2Item", Content = "User 2 data", LastModified = now, UserId = "user2", Type = "Item" };
-            var user1ItemDiffType = new Item { ID = "initUser1ItemOrder", Content = "User 1 order", LastModified = now, UserId = "user1", Type = "Order" };
+            var user1Item = new Item { ID = "initUser1Item", Content = "User 1 data", LastModified = now, OIID = "user1", Type = "Item" };
+            var user2Item = new Item { ID = "initUser2Item", Content = "User 2 data", LastModified = now, OIID = "user2", Type = "Item" };
+            var user1ItemDiffType = new Item { ID = "initUser1ItemOrder", Content = "User 1 order", LastModified = now, OIID = "user1", Type = "Order" };
 
             // Add items to remote store
             await _remoteStore.UpsertAsync(user1Item);
@@ -468,7 +468,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);
-            Assert.Equal("user1", localUser1Item.UserId);
+            Assert.Equal("user1", localUser1Item.OIID);
             Assert.Equal("Item", localUser1Item.Type);
 
             // User2's item should not be synced
@@ -477,7 +477,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // User1's item with different type should still be synced (it's in the same partition)
             Assert.NotNull(localUser1ItemDiffType);
             Assert.Equal("User 1 order", localUser1ItemDiffType.Content);
-            Assert.Equal("user1", localUser1ItemDiffType.UserId);
+            Assert.Equal("user1", localUser1ItemDiffType.OIID);
             Assert.Equal("Order", localUser1ItemDiffType.Type);
         }
 
@@ -498,7 +498,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "sync_test_item",
                 Content = "Item for sync test",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Item"
             };
 
@@ -507,7 +507,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 ID = "sync_test_order",
                 Description = "Order for sync test",
                 LastModified = DateTime.UtcNow,
-                UserId = _testUserId,
+                OIID = _testUserId,
                 Type = "Order"
             };
 
