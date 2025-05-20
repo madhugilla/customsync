@@ -436,14 +436,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // User2's item should not be synced
             Assert.Null(localUser2Item);
         }
-
         [Fact]
-        public async Task SyncEngine_ShouldPullAllUserData_RegardlessOfType()
+        public async Task SyncEngine_ShouldRespectPartitionKey_AndOnlySyncSpecificUserAndType()
         {
-            // Arrange
+            // Arrange - Create items for different users and types to verify partition key filtering
             var now = DateTime.UtcNow;
 
-            // Create items for different users
+            // Create items for different users and types
             var user1Item = new Item { ID = "initUser1Item", Content = "User 1 data", LastModified = now, OIID = "user1", Type = "Item" };
             var user2Item = new Item { ID = "initUser2Item", Content = "User 2 data", LastModified = now, OIID = "user2", Type = "Item" };
             var user1ItemDiffType = new Item { ID = "initUser1ItemOrder", Content = "User 1 order", LastModified = now, OIID = "user1", Type = "Order" };
@@ -454,31 +453,29 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await _remoteStore.UpsertAsync(user1ItemDiffType);
 
             // Wait a moment to ensure items are properly persisted
-            await Task.Delay(500);            // Act - Call SyncAsync instead of InitialUserDataPullAsync because it doesn't filter by type
+            await Task.Delay(500);
+
+            // Act - Create a sync engine for user1's Items only
             var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
                 x => x.ID, x => x.LastModified, "user1");
 
             await syncEngine.SyncAsync();
-            await Task.Delay(500);
-
-            // Assert            // Should have all user1's items but not user2's
+            await Task.Delay(500);            // Assert - Should only sync user1's Items (not Orders or user2's items)
             var localUser1Item = await _localStore.GetAsync("initUser1Item", "user1");
             var localUser2Item = await _localStore.GetAsync("initUser2Item", "user2");
             var localUser1ItemDiffType = await _localStore.GetAsync("initUser1ItemOrder", "user1");
 
+            // User1's Item should be synced
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);
             Assert.Equal("user1", localUser1Item.OIID);
             Assert.Equal("Item", localUser1Item.Type);
 
-            // User2's item should not be synced
+            // User2's item should not be synced (different user)
             Assert.Null(localUser2Item);
 
-            // User1's item with different type should still be synced (it's in the same partition)
-            Assert.NotNull(localUser1ItemDiffType);
-            Assert.Equal("User 1 order", localUser1ItemDiffType.Content);
-            Assert.Equal("user1", localUser1ItemDiffType.OIID);
-            Assert.Equal("Order", localUser1ItemDiffType.Type);
+            // User1's Order should not be synced (different type)
+            Assert.Null(localUser1ItemDiffType);
         }
 
         [Fact]

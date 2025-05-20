@@ -82,10 +82,11 @@ namespace cosmosofflinewithLCC.Data
                 {
                     docType = defaultType;
                 }
-            }            // Query for all items for this user, regardless of type
+            }            // Query for items using the exact partition key
+            string partitionKey = $"{userId}:{docType}";
             var query = _container.GetItemQueryIterator<T>(
-                new QueryDefinition("SELECT * FROM c WHERE STARTSWITH(c.partitionKey, @userId)")
-                .WithParameter("@userId", $"{userId}:")
+                new QueryDefinition("SELECT * FROM c WHERE c.partitionKey = @partitionKey")
+                .WithParameter("@partitionKey", partitionKey)
             );
 
             while (query.HasMoreResults)
