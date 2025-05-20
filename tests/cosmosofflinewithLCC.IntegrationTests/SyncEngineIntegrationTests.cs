@@ -171,9 +171,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Add item only to local store with pending change
             await _localStore.UpsertAsync(localItem);
 
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
+
             // Act
-            Console.WriteLine($"Starting sync with userId {_testUserId}");
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
+            await syncEngine.SyncAsync();
 
             // Assert
             Console.WriteLine($"Checking remote store for item with ID test1"); var remoteItem = await _remoteStore.GetAsync("test1", _testUserId);
@@ -204,8 +206,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Add item only to remote store
             await _remoteStore.UpsertAsync(remoteItem);
 
-            // Act - Make sure to pass the userId parameter
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);            // Assert - Verify item was synced from remote to local
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsync();
+
+            // Assert
             var localItem = await _localStore.GetAsync("test2", _testUserId);
             Assert.NotNull(localItem);
             Assert.Equal(remoteItem.Content, localItem.Content);
@@ -242,8 +249,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
             };
             await _localStore.UpsertAsync(localItem);
 
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
+
             // Act
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);            // Assert - Remote should be updated with local content since local is newer
+            await syncEngine.SyncAsync();
+
+            // Assert - Remote should be updated with local content since local is newer
             var updatedRemoteItem = await _remoteStore.GetAsync("test3", _testUserId);
             Assert.NotNull(updatedRemoteItem);
             Assert.Equal(localItem.Content, updatedRemoteItem.Content);
@@ -300,13 +312,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Wait a moment to ensure items are properly persisted
             await Task.Delay(500);
 
-            // Act - explicitly pass the test user ID
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
 
-            // Wait briefly to ensure sync completes
+            // Act
+            await syncEngine.SyncAsync();
             await Task.Delay(500);
 
-            // Assert            // Local items should be in remote
+            // Assert - Local items should be in remote
             foreach (var item in localItems)
             {
                 var remoteItem = await _remoteStore.GetAsync(item.Id, _testUserId);
@@ -359,8 +372,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Add all items to local store
             await _localStore.UpsertBulkAsync(localItems);
 
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
+
             // Act
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
+            await syncEngine.SyncAsync();
 
             // Assert
             // We need to use GetByUserIdAsync to efficiently get items for a specific user 
@@ -399,10 +415,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Wait a moment to ensure items are properly persisted
             await Task.Delay(500);
 
-            // Act - Sync with user1 filter
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, "user1");
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, "user1");
 
-            // Wait briefly to ensure sync completes
+            // Act
+            await syncEngine.SyncAsync();
             await Task.Delay(500);
 
             // Assert            // Should only have user1's item in local store
@@ -417,6 +434,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // User2's item should not be synced
             Assert.Null(localUser2Item);
         }
+
         [Fact]
         public async Task SyncEngine_ShouldPullAllUserData_RegardlessOfType()
         {
@@ -435,9 +453,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Wait a moment to ensure items are properly persisted
             await Task.Delay(500);            // Act - Call SyncAsync instead of InitialUserDataPullAsync because it doesn't filter by type
-            await SyncEngine.SyncAsync(_localStore, _remoteStore, _logger, x => x.Id, x => x.LastModified, "user1");
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.Id, x => x.LastModified, "user1");
 
-            // Wait briefly to ensure sync completes
+            await syncEngine.SyncAsync();
             await Task.Delay(500);
 
             // Assert            // Should have all user1's items but not user2's
@@ -494,11 +513,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
             await localItemStore.UpsertAsync(item);
             await localOrderStore.UpsertAsync(order);
 
-            // Act - Sync both document types
-            await SyncEngine.SyncAsync(localItemStore, remoteItemStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
-            await SyncEngine.SyncAsync(localOrderStore, remoteOrderStore, _logger, x => x.Id, x => x.LastModified, _testUserId);
+            var itemSyncEngine = new SyncEngine<Item>(localItemStore, remoteItemStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
 
-            // Assert - Both should be in remote store
+            var orderSyncEngine = new SyncEngine<Order>(localOrderStore, remoteOrderStore, _logger,
+                x => x.Id, x => x.LastModified, _testUserId);
+
+            // Act
+            await itemSyncEngine.SyncAsync();
+            await orderSyncEngine.SyncAsync();
+
+            // Assert
             var remoteItem = await remoteItemStore.GetAsync(item.Id, _testUserId);
             var remoteOrder = await remoteOrderStore.GetAsync(order.Id, _testUserId);
 

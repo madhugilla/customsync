@@ -74,13 +74,41 @@ namespace cosmosofflinewithLCC
 
                     // Register logging
                     services.AddLogging();
+
+                    // Register SyncEngine for Item type
+                    services.AddScoped<SyncEngine<Item>>(sp =>
+                    {
+                        var currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
+                        return new SyncEngine<Item>(
+                            sp.GetRequiredService<IDocumentStore<Item>>(),
+                            sp.GetRequiredService<CosmosDbStore<Item>>(),
+                            sp.GetRequiredService<ILogger<SyncEngine<Item>>>(),
+                            x => x.Id,
+                            x => x.LastModified,
+                            currentUserId);
+                    });
+
+                    // Register SyncEngine for Order type
+                    services.AddScoped<SyncEngine<Order>>(sp =>
+                    {
+                        var currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
+                        return new SyncEngine<Order>(
+                            sp.GetRequiredService<IDocumentStore<Order>>(),
+                            sp.GetRequiredService<CosmosDbStore<Order>>(),
+                            sp.GetRequiredService<ILogger<SyncEngine<Order>>>(),
+                            x => x.Id,
+                            x => x.LastModified,
+                            currentUserId);
+                    });
                 })
                 .Build();
 
-            // Resolve services for Item
+            // Get the required services
+            var syncEngineItem = host.Services.GetRequiredService<SyncEngine<Item>>();
+            var syncEngineOrder = host.Services.GetRequiredService<SyncEngine<Order>>();
+            var logger = host.Services.GetRequiredService<ILogger<Program>>();
             var localStore = host.Services.GetRequiredService<IDocumentStore<Item>>();
             var remoteStore = host.Services.GetRequiredService<CosmosDbStore<Item>>();
-            var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
             // Set the current user ID - in a real app this would come from authentication
             string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
@@ -93,9 +121,9 @@ namespace cosmosofflinewithLCC
             {
                 logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
 
-                // Perform initial pull from remote to local without pushing any local changes, filtered by user ID
-                // Pass 'Item' as the document type to ensure proper type identification
-                await SyncEngine.InitialUserDataPullAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId, "Item");
+                // Perform initial pull for both Item and Order types
+                await syncEngineItem.InitialUserDataPullAsync("Item");
+                await syncEngineOrder.InitialUserDataPullAsync("Order");
 
                 logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
             }
@@ -122,37 +150,37 @@ namespace cosmosofflinewithLCC
             };
             await remoteStore.UpsertAsync(remoteItem);
 
-            // Sync for Item - passing the current user ID to filter data
-            await SyncEngine.SyncAsync(localStore, remoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
+            // Sync using the instance-based SyncEngine
+            await syncEngineItem.SyncAsync();
 
             // Result for Item
             var syncedRemote = await remoteStore.GetAsync("1", currentUserId);
             var syncedLocal = await localStore.GetAsync("1", currentUserId);
             Console.WriteLine($"Remote Content: {syncedRemote?.Content}");
-            Console.WriteLine($"Local Content: {syncedLocal?.Content}");            // Demonstrate using another document type (Order) in the same container
-            // // Register services for Order
-            // var container = await host.Services.GetRequiredService<Func<Task<Container>>>().Invoke();
-            // var orderLocalStore = new SqliteStore<Order>(sqlitePath);
-            // var orderRemoteStore = new CosmosDbStore<Order>(container);
+            Console.WriteLine($"Local Content: {syncedLocal?.Content}");
 
-            // // Create and sync an order
-            // var order = new Order
-            // {
-            //     Id = "order1",
-            //     Description = "Test order",
-            //     LastModified = DateTime.UtcNow,
-            //     UserId = currentUserId,
-            //     Type = "Order"
-            // };
+            // Demonstrate using Order type
+            var orderLocalStore = host.Services.GetRequiredService<IDocumentStore<Order>>();
+            var orderRemoteStore = host.Services.GetRequiredService<CosmosDbStore<Order>>();
 
-            // await orderLocalStore.UpsertAsync(order);
+            // Create and sync an order
+            var order = new Order
+            {
+                Id = "order1",
+                Description = "Test order",
+                LastModified = DateTime.UtcNow,
+                UserId = currentUserId,
+                Type = "Order"
+            };
 
-            // // Sync Order data - both Item and Order are in the same Cosmos container but with different partition keys
-            // await SyncEngine.SyncAsync(orderLocalStore, orderRemoteStore, logger, x => x.Id, x => x.LastModified, currentUserId);
+            await orderLocalStore.UpsertAsync(order);
 
-            // // Verify the order was synced
-            // var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
-            // Console.WriteLine($"Order Description: {syncedOrder?.Description}");
+            // Sync Order data using the Order-specific SyncEngine instance
+            await syncEngineOrder.SyncAsync();
+
+            // Verify the order was synced
+            var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
+            Console.WriteLine($"Order Description: {syncedOrder?.Description}");
         }
 
         private static async Task<bool> IsLocalDbEmpty<T>(IDocumentStore<T> localStore) where T : class, new()
