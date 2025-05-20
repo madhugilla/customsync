@@ -15,26 +15,13 @@ namespace cosmosofflinewithLCC.Data
         {
             _dbPath = dbPath;
             _tableName = typeof(T).Name + "s";
-            _idProp = typeof(T).GetProperty("Id") ?? throw new Exception("Model must have Id property");
+            _idProp = typeof(T).GetProperty("ID") ?? throw new Exception("Model must have ID property");
             _lastModifiedProp = typeof(T).GetProperty("LastModified") ?? throw new Exception("Model must have LastModified property");
 
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             connection.Open();
-            var tableCmd = connection.CreateCommand();
-
-            // Update the table schema to include UserId column if it doesn't exist
-            tableCmd.CommandText = $@"
-                CREATE TABLE IF NOT EXISTS [{_tableName}] (
-                    Id TEXT PRIMARY KEY, 
-                    Content TEXT, 
-                    LastModified TEXT,
-                    UserId TEXT
-                ); 
-                CREATE TABLE IF NOT EXISTS PendingChanges_{_tableName} (Id TEXT PRIMARY KEY);
-                
-                -- Check if UserId column exists and add it if it doesn't
-                PRAGMA table_info([{_tableName}]);
-            ";
+            var tableCmd = connection.CreateCommand();            // Update the table schema to include UserId column if it doesn't exist
+            tableCmd.CommandText = $"CREATE TABLE IF NOT EXISTS [{_tableName}] (ID TEXT PRIMARY KEY, Content TEXT, LastModified TEXT, UserId TEXT); CREATE TABLE IF NOT EXISTS PendingChanges_{_tableName} (ID TEXT PRIMARY KEY); PRAGMA table_info([{_tableName}]);";
 
             using var reader = tableCmd.ExecuteReader();
             bool hasUserIdColumn = false;
@@ -71,13 +58,8 @@ namespace cosmosofflinewithLCC.Data
 
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
-            var cmd = connection.CreateCommand();
-
-            // Use both ID and userId for more efficient querying
-            cmd.CommandText = $@"SELECT Content FROM [{_tableName}] 
-                               WHERE Id = @id AND (
-                               json_extract(Content, '$.userId') = @userId 
-                               OR json_extract(Content, '$.UserId') = @userId)";
+            var cmd = connection.CreateCommand();            // Use both ID and userId for more efficient querying
+            cmd.CommandText = $"SELECT Content FROM [{_tableName}] WHERE ID = @id AND (json_extract(Content, '$.userId') = @userId OR json_extract(Content, '$.UserId') = @userId)";
 
             cmd.Parameters.AddWithValue("@id", id);
             cmd.Parameters.AddWithValue("@userId", userId);
@@ -107,14 +89,14 @@ namespace cosmosofflinewithLCC.Data
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified, UserId) 
+            cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, UserId) 
                                VALUES (@id, @content, @lastModified, @userId) 
-                               ON CONFLICT(Id) DO UPDATE SET 
+                               ON CONFLICT(ID) DO UPDATE SET 
                                Content = @content, 
                                LastModified = @lastModified,
                                UserId = @userId; 
                                
-                               INSERT OR IGNORE INTO PendingChanges_{_tableName} (Id) VALUES (@id);";
+                               INSERT OR IGNORE INTO PendingChanges_{_tableName} (ID) VALUES (@id);";
             cmd.Parameters.AddWithValue("@id", id);
             cmd.Parameters.AddWithValue("@content", json);
             cmd.Parameters.AddWithValue("@lastModified", lastModified);
@@ -143,14 +125,14 @@ namespace cosmosofflinewithLCC.Data
                 var json = System.Text.Json.JsonSerializer.Serialize(document);
 
                 var cmd = connection.CreateCommand();
-                cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified, UserId) 
+                cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, UserId) 
                                     VALUES (@id, @content, @lastModified, @userId) 
-                                    ON CONFLICT(Id) DO UPDATE SET 
+                                    ON CONFLICT(ID) DO UPDATE SET 
                                     Content = @content, 
                                     LastModified = @lastModified,
                                     UserId = @userId; 
                                     
-                                    INSERT OR IGNORE INTO PendingChanges_{_tableName} (Id) VALUES (@id);";
+                                    INSERT OR IGNORE INTO PendingChanges_{_tableName} (ID) VALUES (@id);";
                 cmd.Parameters.AddWithValue("@id", id);
                 cmd.Parameters.AddWithValue("@content", json);
                 cmd.Parameters.AddWithValue("@lastModified", lastModified);
@@ -181,7 +163,7 @@ namespace cosmosofflinewithLCC.Data
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $"SELECT i.Content FROM [{_tableName}] i JOIN PendingChanges_{_tableName} p ON i.Id = p.Id";
+            cmd.CommandText = $"SELECT i.Content FROM [{_tableName}] i JOIN PendingChanges_{_tableName} p ON i.ID = p.ID";
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
@@ -195,7 +177,7 @@ namespace cosmosofflinewithLCC.Data
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $"DELETE FROM PendingChanges_{_tableName} WHERE Id = @id";
+            cmd.CommandText = $"DELETE FROM PendingChanges_{_tableName} WHERE ID = @id";
             cmd.Parameters.AddWithValue("@id", id);
             await cmd.ExecuteNonQueryAsync();
         }

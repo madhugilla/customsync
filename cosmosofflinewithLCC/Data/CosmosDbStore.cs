@@ -22,7 +22,7 @@ namespace cosmosofflinewithLCC.Data
         public CosmosDbStore(Container container)
         {
             _container = container;
-            _idProp = typeof(T).GetProperty("Id") ?? throw new System.Exception("Model must have Id property");
+            _idProp = typeof(T).GetProperty("ID") ?? throw new System.Exception("Model must have ID property");
             _userIdProp = typeof(T).GetProperty("UserId") ?? throw new System.Exception("Model must have UserId property for partitioning");
             _typeProp = typeof(T).GetProperty("Type") ?? throw new System.Exception("Model must have Type property for partitioning");
         }

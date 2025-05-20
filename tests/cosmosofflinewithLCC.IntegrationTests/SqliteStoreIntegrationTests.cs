@@ -16,13 +16,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
         public async Task UpsertAndGetAsync_ShouldStoreAndRetrieveItem()
         {
             var store = new SqliteStore<Item>(_dbPath);
-            var item = new Item { Id = "1", Content = "Test Item", LastModified = DateTime.UtcNow, UserId = "testUser" };
+            var item = new Item { ID = "1", Content = "Test Item", LastModified = DateTime.UtcNow, UserId = "testUser" };
 
             await store.UpsertAsync(item);
             var retrievedItem = await store.GetAsync("1", "testUser");
 
             Assert.NotNull(retrievedItem);
-            Assert.Equal(item.Id, retrievedItem.Id);
+            Assert.Equal(item.ID, retrievedItem.ID);
             Assert.Equal(item.Content, retrievedItem.Content);
             Assert.Equal(item.UserId, retrievedItem.UserId);
         }
@@ -33,8 +33,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var store = new SqliteStore<Item>(_dbPath);
             var items = new List<Item>
             {
-                new Item { Id = "1", Content = "Item 1", LastModified = DateTime.UtcNow },
-                new Item { Id = "2", Content = "Item 2", LastModified = DateTime.UtcNow }
+                new Item { ID = "1", Content = "Item 1", LastModified = DateTime.UtcNow },
+                new Item { ID = "2", Content = "Item 2", LastModified = DateTime.UtcNow }
             };
 
             await store.UpsertBulkAsync(items);
@@ -47,20 +47,20 @@ namespace cosmosofflinewithLCC.IntegrationTests
         public async Task GetPendingChangesAsync_ShouldReturnPendingItems()
         {
             var store = new SqliteStore<Item>(_dbPath);
-            var item = new Item { Id = "1", Content = "Pending Item", LastModified = DateTime.UtcNow };
+            var item = new Item { ID = "1", Content = "Pending Item", LastModified = DateTime.UtcNow };
 
             await store.UpsertAsync(item);
             var pendingItems = await store.GetPendingChangesAsync();
 
             Assert.Single(pendingItems);
-            Assert.Equal(item.Id, pendingItems[0].Id);
+            Assert.Equal(item.ID, pendingItems[0].ID);
         }
 
         [Fact]
         public async Task RemovePendingChangeAsync_ShouldRemovePendingItem()
         {
             var store = new SqliteStore<Item>(_dbPath);
-            var item = new Item { Id = "1", Content = "Pending Item", LastModified = DateTime.UtcNow };
+            var item = new Item { ID = "1", Content = "Pending Item", LastModified = DateTime.UtcNow };
 
             await store.UpsertAsync(item);
             await store.RemovePendingChangeAsync("1");
@@ -82,7 +82,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             var user1Item = new Item
             {
-                Id = "user1_item",
+                ID = "user1_item",
                 Content = "User 1 content",
                 LastModified = DateTime.UtcNow,
                 UserId = user1,
@@ -91,7 +91,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             var user2Item = new Item
             {
-                Id = "user2_item",
+                ID = "user2_item",
                 Content = "User 2 content",
                 LastModified = DateTime.UtcNow,
                 UserId = user2,
@@ -100,7 +100,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             var user1Order = new Order
             {
-                Id = "user1_order",
+                ID = "user1_order",
                 Description = "User 1 order",
                 LastModified = DateTime.UtcNow,
                 UserId = user1,
@@ -119,13 +119,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Verify results
             Assert.Single(user1Items);
-            Assert.Equal("user1_item", user1Items[0].Id);
+            Assert.Equal("user1_item", user1Items[0].ID);
 
             Assert.Single(user2Items);
-            Assert.Equal("user2_item", user2Items[0].Id);
+            Assert.Equal("user2_item", user2Items[0].ID);
 
             Assert.Single(user1Orders);
-            Assert.Equal("user1_order", user1Orders[0].Id);
+            Assert.Equal("user1_order", user1Orders[0].ID);
         }
 
         [Fact]
@@ -140,7 +140,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             var user1Item = new Item
             {
-                Id = "pending1",
+                ID = "pending1",
                 Content = "Pending User 1",
                 LastModified = DateTime.UtcNow,
                 UserId = user1,
@@ -149,7 +149,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             var user2Item = new Item
             {
-                Id = "pending2",
+                ID = "pending2",
                 Content = "Pending User 2",
                 LastModified = DateTime.UtcNow,
                 UserId = user2,
@@ -166,11 +166,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Verify results
             Assert.Single(user1Pending);
-            Assert.Equal("pending1", user1Pending[0].Id);
+            Assert.Equal("pending1", user1Pending[0].ID);
             Assert.Equal(user1, user1Pending[0].UserId);
 
             Assert.Single(user2Pending);
-            Assert.Equal("pending2", user2Pending[0].Id);
+            Assert.Equal("pending2", user2Pending[0].ID);
             Assert.Equal(user2, user2Pending[0].UserId);
         }
     }

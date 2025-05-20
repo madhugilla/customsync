@@ -1,16 +1,26 @@
-﻿using cosmosofflinewithLCC.Data;
-using cosmosofflinewithLCC.Models;
-using cosmosofflinewithLCC.Sync;
+﻿using System;
+using System.IO;
+using System.Threading.Tasks;
+using System.Collections.Generic;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using cosmosofflinewithLCC.Data;
+using cosmosofflinewithLCC.Models;
+using cosmosofflinewithLCC.Sync;
 
 namespace cosmosofflinewithLCC
 {
-    class Program
+    public class Program
     {
-        static async Task Main(string[] args)
+        private static async Task<bool> IsLocalDbEmpty<T>(IDocumentStore<T> localStore) where T : class, new()
+        {
+            var items = await localStore.GetAllAsync();
+            return items.Count == 0;
+        }
+
+        public static async Task Main(string[] args)
         {
             var host = Host.CreateDefaultBuilder(args)
                 .ConfigureServices((context, services) =>
@@ -83,7 +93,7 @@ namespace cosmosofflinewithLCC
                             sp.GetRequiredService<IDocumentStore<Item>>(),
                             sp.GetRequiredService<CosmosDbStore<Item>>(),
                             sp.GetRequiredService<ILogger<SyncEngine<Item>>>(),
-                            x => x.Id,
+                            x => x.ID,
                             x => x.LastModified,
                             currentUserId);
                     });
@@ -96,7 +106,7 @@ namespace cosmosofflinewithLCC
                             sp.GetRequiredService<IDocumentStore<Order>>(),
                             sp.GetRequiredService<CosmosDbStore<Order>>(),
                             sp.GetRequiredService<ILogger<SyncEngine<Order>>>(),
-                            x => x.Id,
+                            x => x.ID,
                             x => x.LastModified,
                             currentUserId);
                     });
@@ -104,11 +114,12 @@ namespace cosmosofflinewithLCC
                 .Build();
 
             // Get the required services
-            var syncEngineItem = host.Services.GetRequiredService<SyncEngine<Item>>();
-            var syncEngineOrder = host.Services.GetRequiredService<SyncEngine<Order>>();
-            var logger = host.Services.GetRequiredService<ILogger<Program>>();
-            var localStore = host.Services.GetRequiredService<IDocumentStore<Item>>();
-            var remoteStore = host.Services.GetRequiredService<CosmosDbStore<Item>>();
+            using var serviceScope = host.Services.CreateScope();
+            var syncEngineItem = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Item>>();
+            var syncEngineOrder = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Order>>();
+            var logger = serviceScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            var localStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Item>>();
+            var remoteStore = serviceScope.ServiceProvider.GetRequiredService<CosmosDbStore<Item>>();
 
             // Set the current user ID - in a real app this would come from authentication
             string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
@@ -129,9 +140,9 @@ namespace cosmosofflinewithLCC
             }
 
             // Simulate offline change for Item
-            var item = new Item
+            var item = new Item()
             {
-                Id = "1",
+                ID = "1",
                 Content = "Local version",
                 LastModified = DateTime.UtcNow,
                 UserId = currentUserId,
@@ -140,9 +151,9 @@ namespace cosmosofflinewithLCC
             await localStore.UpsertAsync(item);
 
             // Simulate remote change (conflict) for Item
-            var remoteItem = new Item
+            var remoteItem = new Item()
             {
-                Id = "1",
+                ID = "1",
                 Content = "Remote version",
                 LastModified = DateTime.UtcNow.AddMinutes(-10),
                 UserId = currentUserId,
@@ -160,13 +171,13 @@ namespace cosmosofflinewithLCC
             Console.WriteLine($"Local Content: {syncedLocal?.Content}");
 
             // Demonstrate using Order type
-            var orderLocalStore = host.Services.GetRequiredService<IDocumentStore<Order>>();
-            var orderRemoteStore = host.Services.GetRequiredService<CosmosDbStore<Order>>();
+            var orderLocalStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Order>>();
+            var orderRemoteStore = serviceScope.ServiceProvider.GetRequiredService<CosmosDbStore<Order>>();
 
             // Create and sync an order
-            var order = new Order
+            var order = new Order()
             {
-                Id = "order1",
+                ID = "order1",
                 Description = "Test order",
                 LastModified = DateTime.UtcNow,
                 UserId = currentUserId,
@@ -181,12 +192,6 @@ namespace cosmosofflinewithLCC
             // Verify the order was synced
             var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
             Console.WriteLine($"Order Description: {syncedOrder?.Description}");
-        }
-
-        private static async Task<bool> IsLocalDbEmpty<T>(IDocumentStore<T> localStore) where T : class, new()
-        {
-            var items = await localStore.GetAllAsync();
-            return items.Count == 0;
         }
     }
 }

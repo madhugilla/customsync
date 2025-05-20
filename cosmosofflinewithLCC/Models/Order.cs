@@ -5,7 +5,7 @@ namespace cosmosofflinewithLCC.Models
     public class Order
     {
         [JsonPropertyName("id")]
-        public string Id { get; set; } = string.Empty;
+        public string ID { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public DateTime LastModified { get; set; }
 
