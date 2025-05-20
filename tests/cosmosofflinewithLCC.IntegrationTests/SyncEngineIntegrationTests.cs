@@ -547,5 +547,121 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 }
             }
         }
+
+        [Fact]
+        public async Task InitialUserDataPull_ShouldOnlyPullItemsOfSpecifiedType()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var itemType1 = new Item { ID = "type1Item", Content = "Type 1 content", LastModified = now, OIID = _testUserId, Type = "Item" };
+            var itemType2 = new Item { ID = "type2Item", Content = "Type 2 content", LastModified = now, OIID = _testUserId, Type = "Type2" };
+
+            // Add both items to remote store
+            await _remoteStore.UpsertAsync(itemType1);
+            await _remoteStore.UpsertAsync(itemType2);
+            await Task.Delay(500);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act - Pull only Type1 items
+            await syncEngine.InitialUserDataPullAsync("Item");
+
+            // Assert
+            var localType1Item = await _localStore.GetAsync("type1Item", _testUserId);
+            var localType2Item = await _localStore.GetAsync("type2Item", _testUserId);
+
+            Assert.NotNull(localType1Item);
+            Assert.Equal("Type 1 content", localType1Item.Content);
+            Assert.Null(localType2Item);
+        }
+
+        [Fact]
+        public async Task SyncEngine_ShouldHandleMissingTypeProperty()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var item = new Item { ID = "noTypeItem", Content = "No type content", LastModified = now, OIID = _testUserId, Type = null! };
+
+            // Add item to local store
+            await _localStore.UpsertAsync(item);
+            await Task.Delay(500);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsync();
+
+            // Assert - Should use class name as type
+            var remoteItem = await _remoteStore.GetAsync("noTypeItem", _testUserId);
+            Assert.NotNull(remoteItem);
+            Assert.Equal("Item", remoteItem.Type);
+        }        [Fact]
+        public void SyncEngine_ShouldHandleEmptyUserId()
+        {
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() => new SyncEngine<Item>(
+                _localStore,
+                _remoteStore,
+                _logger,
+                x => x.ID,
+                x => x.LastModified,
+                string.Empty));
+        }
+
+        [Fact]
+        public async Task SyncEngine_ShouldHandleConcurrentModifications()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var item = new Item { ID = "concurrentItem", Content = "Original", LastModified = now, OIID = _testUserId, Type = "Item" };
+
+            // Add to both stores with pending change in local
+            await _remoteStore.UpsertAsync(item);
+            await _localStore.UpsertAsync(item);
+            await Task.Delay(500);
+
+            // Modify remote while local has pending change
+            var remoteModified = new Item { ID = "concurrentItem", Content = "Remote Modified", LastModified = now.AddMinutes(1), OIID = _testUserId, Type = "Item" };
+            await _remoteStore.UpsertAsync(remoteModified);
+
+            var localModified = new Item { ID = "concurrentItem", Content = "Local Modified", LastModified = now.AddSeconds(30), OIID = _testUserId, Type = "Item" };
+            await _localStore.UpsertAsync(localModified);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsync();
+
+            // Assert - Remote version should win as it's newer
+            var finalLocal = await _localStore.GetAsync("concurrentItem", _testUserId);
+            Assert.NotNull(finalLocal);
+            Assert.Equal("Remote Modified", finalLocal.Content);
+            Assert.Equal(now.AddMinutes(1), finalLocal.LastModified);
+        }
+
+        [Fact]
+        public async Task SyncEngine_ShouldNotPushNullItems()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var item = new Item { ID = null!, Content = "No ID", LastModified = now, OIID = _testUserId, Type = "Item" };
+
+            // Add to local store
+            await _localStore.UpsertAsync(item);
+            await Task.Delay(500);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsync();
+
+            // Assert - Should log warning and skip item
+            var remoteItems = await _remoteStore.GetByUserIdAsync(_testUserId);
+            Assert.Empty(remoteItems);
+        }
     }
 }
