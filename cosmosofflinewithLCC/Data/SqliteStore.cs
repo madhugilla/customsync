@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
 using System.Reflection;
 using Microsoft.Data.Sqlite;
 
@@ -97,14 +94,31 @@ namespace cosmosofflinewithLCC.Data
         {
             var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
             var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
+
+            // Extract the UserId for SQL indexing
+            string? userId = null;
+            var userIdProp = typeof(T).GetProperty("UserId");
+            if (userIdProp != null)
+            {
+                userId = userIdProp.GetValue(document)?.ToString();
+            }
+
             var json = System.Text.Json.JsonSerializer.Serialize(document);
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
             var cmd = connection.CreateCommand();
-            cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified) VALUES (@id, @content, @lastModified) ON CONFLICT(Id) DO UPDATE SET Content = @content, LastModified = @lastModified; INSERT OR IGNORE INTO PendingChanges_{_tableName} (Id) VALUES (@id);";
+            cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified, UserId) 
+                               VALUES (@id, @content, @lastModified, @userId) 
+                               ON CONFLICT(Id) DO UPDATE SET 
+                               Content = @content, 
+                               LastModified = @lastModified,
+                               UserId = @userId; 
+                               
+                               INSERT OR IGNORE INTO PendingChanges_{_tableName} (Id) VALUES (@id);";
             cmd.Parameters.AddWithValue("@id", id);
             cmd.Parameters.AddWithValue("@content", json);
             cmd.Parameters.AddWithValue("@lastModified", lastModified);
+            cmd.Parameters.AddWithValue("@userId", userId ?? (object)DBNull.Value);
             await cmd.ExecuteNonQueryAsync();
         }
         public async Task UpsertBulkAsync(IEnumerable<T> documents)
@@ -117,15 +131,30 @@ namespace cosmosofflinewithLCC.Data
             {
                 var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
                 var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
+
+                // Extract the UserId for SQL indexing
+                string? userId = null;
+                var userIdProp = typeof(T).GetProperty("UserId");
+                if (userIdProp != null)
+                {
+                    userId = userIdProp.GetValue(document)?.ToString();
+                }
+
                 var json = System.Text.Json.JsonSerializer.Serialize(document);
 
                 var cmd = connection.CreateCommand();
-                cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified) VALUES (@id, @content, @lastModified) 
-                                    ON CONFLICT(Id) DO UPDATE SET Content = @content, LastModified = @lastModified; 
+                cmd.CommandText = $@"INSERT INTO [{_tableName}] (Id, Content, LastModified, UserId) 
+                                    VALUES (@id, @content, @lastModified, @userId) 
+                                    ON CONFLICT(Id) DO UPDATE SET 
+                                    Content = @content, 
+                                    LastModified = @lastModified,
+                                    UserId = @userId; 
+                                    
                                     INSERT OR IGNORE INTO PendingChanges_{_tableName} (Id) VALUES (@id);";
                 cmd.Parameters.AddWithValue("@id", id);
                 cmd.Parameters.AddWithValue("@content", json);
                 cmd.Parameters.AddWithValue("@lastModified", lastModified);
+                cmd.Parameters.AddWithValue("@userId", userId ?? (object)DBNull.Value);
                 await cmd.ExecuteNonQueryAsync();
             }
 

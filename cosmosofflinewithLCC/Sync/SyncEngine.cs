@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Linq.Expressions;
-using System.Linq;
 using cosmosofflinewithLCC.Data;
 using Microsoft.Extensions.Logging;
 
@@ -8,7 +7,7 @@ namespace cosmosofflinewithLCC.Sync
 {
     /// <summary>
     /// TODO: implement soft deletes
-    /// </summary>\
+    /// </summary>
     public static class SyncEngine
     {
         private static string GetPropertyName<T, TProperty>(Expression<Func<T, TProperty>> propertyExpression)
@@ -24,21 +23,17 @@ namespace cosmosofflinewithLCC.Sync
             }
 
             throw new ArgumentException("Invalid property expression. Ensure the expression is a simple property access, e.g., x => x.PropertyName.");
-        }
-
-        /// <summary>
-        /// Ensures a document has the required properties for Cosmos DB
-        /// </summary>
+        }        /// <summary>
+                 /// Ensures a document has the required properties for Cosmos DB
+                 /// </summary>
         private static void EnsureCosmosProperties<T>(T document, string userId, string docType) where T : class, new()
         {
-            // Set the userId (partition key) if the property exists
+            // Set the userId if the property exists
             var userIdProp = typeof(T).GetProperty("UserId");
             if (userIdProp != null && userIdProp.CanWrite)
             {
                 // Always set the userId to match the provided value to ensure partition key consistency
-                // This is critical for Cosmos DB operations
                 userIdProp.SetValue(document, userId);
-
                 Console.WriteLine($"Set UserId to {userId} for document");
             }
             else
@@ -54,9 +49,12 @@ namespace cosmosofflinewithLCC.Sync
                 typeProp.SetValue(document, docType);
                 Console.WriteLine($"Set Type to {docType} for document");
             }
-        }        /// <summary>
-                 /// Synchronizes data between local and remote stores for a specific user
-                 /// </summary>
+
+            // Note: The partitionKey property is set in CosmosDbStore, not here
+            // The partition key will be created as userId:docType in CosmosDbStore
+        }/// <summary>
+         /// Synchronizes data between local and remote stores for a specific user
+         /// </summary>
         public static async Task SyncAsync<T>(IDocumentStore<T> local, IDocumentStore<T> remote, ILogger logger, Expression<Func<T, object>> idExpression, Expression<Func<T, DateTime?>> lastModifiedExpression, string userId) where T : class, new()
         {
             if (string.IsNullOrEmpty(userId))
@@ -267,7 +265,60 @@ namespace cosmosofflinewithLCC.Sync
             var idPropName = GetPropertyName(idExpression);
             var lastModifiedPropName = GetPropertyName(lastModifiedExpression);
 
-            await PullRemoteChanges(local, remote, logger, idPropName, lastModifiedPropName, userId);
+            // Get remote items for the specific user
+            logger.LogInformation("Retrieving items for user {UserId} from remote store", userId);
+            var remoteItems = await remote.GetByUserIdAsync(userId);
+            logger.LogInformation("Retrieved {Count} items for user {UserId} from remote store", remoteItems.Count, userId);
+
+            var itemsToUpsert = new List<T>();
+
+            foreach (var remoteItem in remoteItems)
+            {
+                if (remoteItem == null) continue;
+
+                var id = typeof(T).GetProperty(idPropName)?.GetValue(remoteItem)?.ToString();
+                if (id == null) continue;
+
+                // Always use efficient point read with partition key
+                T? localItem = await local.GetAsync(id, userId);
+
+                var remoteLast = typeof(T).GetProperty(lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
+                var localLast = localItem != null
+                    ? typeof(T).GetProperty(lastModifiedPropName)?.GetValue(localItem) as DateTime?
+                    : null;
+
+                if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
+                {
+                    logger.LogInformation(localItem == null
+                        ? "Preparing new item with Id {Id} for local"
+                        : "Preparing update for item with Id {Id} on local as remote is newer", id);
+                    // Ensure properties are correctly set
+                    // Check if Type property exists and use it, otherwise use the provided docType
+                    var typeProp = typeof(T).GetProperty("Type");
+                    string typeValue = docType;
+                    if (typeProp != null)
+                    {
+                        var currentTypeValue = typeProp.GetValue(remoteItem)?.ToString();
+                        if (!string.IsNullOrEmpty(currentTypeValue))
+                        {
+                            typeValue = currentTypeValue;
+                        }
+                    }
+                    EnsureCosmosProperties(remoteItem, userId, typeValue);
+
+                    itemsToUpsert.Add(remoteItem);
+                }
+                else
+                {
+                    logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
+                }
+            }
+
+            if (itemsToUpsert.Any())
+            {
+                await local.UpsertBulkAsync(itemsToUpsert);
+                logger.LogInformation("{Count} items pulled during initial data pull", itemsToUpsert.Count);
+            }
 
             logger.LogInformation("Initial data pull completed for user {UserId}", userId);
         }

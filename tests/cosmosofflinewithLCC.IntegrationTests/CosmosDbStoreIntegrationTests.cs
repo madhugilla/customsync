@@ -1,11 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using Microsoft.Azure.Cosmos;
-using Xunit;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
@@ -42,14 +37,12 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
                 // Create database if not exists
                 _cosmosClient.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
-                var database = _cosmosClient.GetDatabase(_databaseId);
+                var database = _cosmosClient.GetDatabase(_databaseId); Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");
 
-                Console.WriteLine($"Creating container {_containerId} with partition key path /userId");
-
-                // Create container with userId as the partition key
+                // Create container with composite partition key (userId:docType)
                 database.CreateContainerIfNotExistsAsync(
                     id: _containerId,
-                    partitionKeyPath: "/userId",
+                    partitionKeyPath: "/partitionKey",
                     throughput: 400).GetAwaiter().GetResult();
 
                 _container = database.GetContainer(_containerId);
@@ -73,8 +66,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
             try
             {
                 // Use a query to find all items (regardless of partition key)
-                var query = new QueryDefinition("SELECT c.id, c.userId FROM c");
-                var itemsToDelete = new List<(string id, string userId)>();
+                var query = new QueryDefinition("SELECT c.id, c.partitionKey FROM c");
+                var itemsToDelete = new List<(string id, string partitionKey)>();
 
                 using var iterator = _container.GetItemQueryIterator<dynamic>(query);
                 while (iterator.HasMoreResults)
@@ -83,25 +76,40 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     foreach (var item in response)
                     {
                         string id = item.id;
-                        string userId = item.userId ?? _testUserId; // Default to test user if null
-                        itemsToDelete.Add((id, userId));
+                        string partitionKey = item.partitionKey;
+
+                        if (string.IsNullOrEmpty(partitionKey))
+                        {
+                            // Fall back to old format if needed
+                            if (item.userId != null)
+                            {
+                                string userId = item.userId;
+                                partitionKey = $"{userId}:Item"; // Default type to Item if not specified
+                            }
+                            else
+                            {
+                                partitionKey = $"{_testUserId}:Item"; // Default fallback
+                            }
+                        }
+
+                        itemsToDelete.Add((id, partitionKey));
                     }
                 }
 
                 Console.WriteLine($"Found {itemsToDelete.Count} items to delete in cleanup");
 
-                foreach (var (id, userId) in itemsToDelete)
+                foreach (var (id, partitionKey) in itemsToDelete)
                 {
                     try
                     {
-                        // Delete using userId as the partition key
-                        Console.WriteLine($"Deleting item with id {id} from partition {userId}");
-                        await _container.DeleteItemAsync<dynamic>(id, new PartitionKey(userId));
+                        // Delete using the composite partition key
+                        Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
+                        await _container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
                     }
                     catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         // Ignore if item not found
-                        Console.WriteLine($"Item not found during deletion: {id} in partition {userId}");
+                        Console.WriteLine($"Item not found during deletion: {id} in partition {partitionKey}");
                     }
                 }
             }
@@ -302,6 +310,76 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Assert
             Assert.Empty(results);
+        }
+
+        [Fact]
+        public async Task GetAsync_WithCompositePartitionKey_ShouldRetrieveItem()
+        {
+            // Arrange
+            var item = new Item
+            {
+                Id = Guid.NewGuid().ToString(),
+                Content = "Composite partition key test",
+                LastModified = DateTime.UtcNow,
+                UserId = _testUserId,
+                Type = "Item"
+            };
+
+            // Act - Upsert the item
+            Console.WriteLine($"Upserting document with ID: {item.Id} with composite partition key: {_testUserId}:Item");
+            await _store.UpsertAsync(item);
+
+            // Retrieve the item using the user ID (which should work with the composite partition key)
+            var result = await _store.GetAsync(item.Id, item.UserId);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(item.Id, result.Id);
+            Assert.Equal(item.Content, result.Content);
+            Assert.Equal(item.UserId, result.UserId);
+        }
+
+        [Fact]
+        public async Task MultipleDocumentTypes_ShouldBeStoredInSameContainer()
+        {
+            // Arrange - create an Order class in the same container
+            var container = _container;
+            var orderStore = new CosmosDbStore<Order>(container);
+
+            var item = new Item
+            {
+                Id = Guid.NewGuid().ToString(),
+                Content = "Item type test",
+                LastModified = DateTime.UtcNow,
+                UserId = _testUserId,
+                Type = "Item"
+            };
+
+            var order = new Order
+            {
+                Id = Guid.NewGuid().ToString(),
+                Description = "Order type test",
+                LastModified = DateTime.UtcNow,
+                UserId = _testUserId,
+                Type = "Order"
+            };
+
+            // Act - Insert both document types in the same container
+            await _store.UpsertAsync(item);
+            await orderStore.UpsertAsync(order);
+
+            // Retrieve both items
+            var retrievedItem = await _store.GetAsync(item.Id, _testUserId);
+            var retrievedOrder = await orderStore.GetAsync(order.Id, _testUserId);
+
+            // Assert
+            Assert.NotNull(retrievedItem);
+            Assert.Equal("Item", retrievedItem.Type);
+            Assert.Equal(item.Content, retrievedItem.Content);
+
+            Assert.NotNull(retrievedOrder);
+            Assert.Equal("Order", retrievedOrder.Type);
+            Assert.Equal(order.Description, retrievedOrder.Description);
         }
     }
 }

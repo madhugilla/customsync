@@ -11,9 +11,10 @@ namespace cosmosofflinewithLCC.Data
         private readonly Container _container;
         private readonly PropertyInfo _idProp;
         private readonly PropertyInfo? _userIdProp;
+        private readonly PropertyInfo? _typeProp;
 
         // Cosmos DB requires exact casing for the partition key property
-        private const string COSMOS_PARTITION_KEY_NAME = "userId";
+        private const string COSMOS_PARTITION_KEY_NAME = "partitionKey";
 
         public CosmosDbStore(Container container)
         {
@@ -23,16 +24,26 @@ namespace cosmosofflinewithLCC.Data
             // Find the userId property (could be UserId or userId)
             _userIdProp = typeof(T).GetProperty("UserId") ?? typeof(T).GetProperty("userId");
 
+            // Find the Type property
+            _typeProp = typeof(T).GetProperty("Type");
+
             if (_userIdProp == null)
             {
                 throw new System.Exception("Model must have UserId property for partitioning");
             }
-        }        /// <summary>
-                 /// Gets a document by ID and userId (partition key)
-                 /// </summary>
-                 /// <param name="id">The document ID</param>
-                 /// <param name="userId">The user ID (partition key)</param>
-                 /// <returns>The retrieved document or null if not found</returns>
+
+            if (_typeProp == null)
+            {
+                throw new System.Exception("Model must have Type property for partitioning");
+            }
+        }
+
+        /// <summary>
+        /// Gets a document by ID and userId (partition key)
+        /// </summary>
+        /// <param name="id">The document ID</param>
+        /// <param name="userId">The user ID (part of the partition key)</param>
+        /// <returns>The retrieved document or null if not found</returns>
         public async Task<T?> GetAsync(string id, string userId)
         {
             if (string.IsNullOrEmpty(userId))
@@ -42,10 +53,16 @@ namespace cosmosofflinewithLCC.Data
 
             try
             {
-                // Use a direct point read with the partition key for maximum efficiency
+                // Get the document type from the generic type parameter T
+                string docType = typeof(T).Name;
+
+                // Create the composite partition key
+                string partitionKey = $"{userId}:{docType}";
+
+                // Use a direct point read with the composite partition key for maximum efficiency
                 var response = await _container.ReadItemAsync<T>(
                     id: id,
-                    partitionKey: new PartitionKey(userId)
+                    partitionKey: new PartitionKey(partitionKey)
                 );
 
                 return response.Resource;
@@ -67,38 +84,50 @@ namespace cosmosofflinewithLCC.Data
                     throw new System.Exception("Id cannot be null or empty");
                 }
 
-                // Get the partition key value (userId)
+                // Get the partition key value components (userId and docType)
                 string? userId = _userIdProp?.GetValue(document)?.ToString();
                 if (string.IsNullOrEmpty(userId))
                 {
                     throw new System.Exception("UserId cannot be null or empty");
                 }
 
+                // Get document type (can be from the Type property or from the class name)
+                string? docType = _typeProp?.GetValue(document)?.ToString();
+                if (string.IsNullOrEmpty(docType))
+                {
+                    // Fallback to class name if Type property is empty
+                    docType = typeof(T).Name;
+                }
+
+                // Create composite partition key
+                string partitionKey = $"{userId}:{docType}";
+
                 // Serialize to JSON string first
                 string json = JsonConvert.SerializeObject(document);
 
                 // Parse into JObject to manipulate properties
-                JObject jObject = JObject.Parse(json);
-
-                // Ensure the document has the correct properties for Cosmos DB:
+                JObject jObject = JObject.Parse(json);                // Ensure the document has the correct properties for Cosmos DB:
                 // 1. Lowercase 'id' (Cosmos DB standard)
                 jObject.Remove("Id");
                 jObject["id"] = id;
 
-                // 2. Ensure the partition key has the EXACT name expected by Cosmos DB
-                // Remove any variations like "UserId" or "userId"
+                // Add the composite partition key with the exact name expected by Cosmos DB
+                // Remove any variations of userId/UserId that might exist
                 jObject.Remove("UserId");
                 jObject.Remove("userId");
 
-                // Add the partition key with the exact name Cosmos DB expects
-                jObject[COSMOS_PARTITION_KEY_NAME] = userId;
+                // Keep the original UserId property for backward compatibility
+                jObject["userId"] = userId;
 
-                Console.WriteLine($"Upserting document with ID: {id}, partition key: {userId}, key property: {COSMOS_PARTITION_KEY_NAME}");
+                // Add the composite partition key for Cosmos DB partitioning
+                jObject[COSMOS_PARTITION_KEY_NAME] = partitionKey;
 
-                // Use the exact partition key value for the operation
+                Console.WriteLine($"Upserting document with ID: {id}, partition key: {partitionKey}, key property: {COSMOS_PARTITION_KEY_NAME}");
+
+                // Use the composite partition key value for the operation
                 await _container.UpsertItemAsync<JObject>(
                     item: jObject,
-                    partitionKey: new PartitionKey(userId)
+                    partitionKey: new PartitionKey(partitionKey)
                 );
             }
             catch (CosmosException ex)
@@ -137,20 +166,30 @@ namespace cosmosofflinewithLCC.Data
                 foreach (var document in documents)
                 {
                     try
-                    {
-                        // Get the document ID and convert to lowercase for Cosmos DB
+                    {                        // Get the document ID and convert to lowercase for Cosmos DB
                         string? id = _idProp.GetValue(document)?.ToString();
                         if (string.IsNullOrEmpty(id))
                         {
                             throw new System.Exception("Id cannot be null or empty");
                         }
 
-                        // Get the partition key value (userId)
+                        // Get the partition key value components (userId and docType)
                         string? userId = _userIdProp?.GetValue(document)?.ToString();
                         if (string.IsNullOrEmpty(userId))
                         {
                             throw new System.Exception("UserId cannot be null or empty");
                         }
+
+                        // Get document type (can be from the Type property or from the class name)
+                        string? docType = _typeProp?.GetValue(document)?.ToString();
+                        if (string.IsNullOrEmpty(docType))
+                        {
+                            // Fallback to class name if Type property is empty
+                            docType = typeof(T).Name;
+                        }
+
+                        // Create composite partition key
+                        string partitionKey = $"{userId}:{docType}";
 
                         // Serialize to JSON string first
                         string json = JsonConvert.SerializeObject(document);
@@ -163,20 +202,21 @@ namespace cosmosofflinewithLCC.Data
                         jObject.Remove("Id");
                         jObject["id"] = id;
 
-                        // 2. Ensure the partition key has the EXACT name expected by Cosmos DB
-                        // Remove any variations like "UserId" or "userId"
+                        // Remove any variations of userId/UserId that might exist
                         jObject.Remove("UserId");
                         jObject.Remove("userId");
 
-                        // Add the partition key with the exact name Cosmos DB expects
-                        jObject[COSMOS_PARTITION_KEY_NAME] = userId;
+                        // Keep the original UserId property for backward compatibility
+                        jObject["userId"] = userId;
+                        // Add the composite partition key for Cosmos DB partitioning
+                        jObject[COSMOS_PARTITION_KEY_NAME] = partitionKey;
 
-                        Console.WriteLine($"Bulk upserting document with ID: {id}, partition key: {userId}, key property: {COSMOS_PARTITION_KEY_NAME}");
+                        Console.WriteLine($"Bulk upserting document with ID: {id}, partition key: {partitionKey}, key property: {COSMOS_PARTITION_KEY_NAME}");
 
-                        // Use the exact partition key value for the operation
+                        // Use the composite partition key value for the operation
                         await _container.UpsertItemAsync<JObject>(
                             item: jObject,
-                            partitionKey: new PartitionKey(userId)
+                            partitionKey: new PartitionKey(partitionKey)
                         );
                     }
                     catch (Exception ex)
@@ -201,10 +241,10 @@ namespace cosmosofflinewithLCC.Data
         }
 
         /// <summary>
-        /// Gets all documents for a specific user ID
+        /// Gets all documents for a specific user ID and document type
         /// </summary>
         /// <param name="userId">The user ID to filter by</param>
-        /// <returns>A list of documents belonging to the specified user</returns>
+        /// <returns>A list of documents belonging to the specified user for the current document type</returns>
         public async Task<List<T>> GetByUserIdAsync(string userId)
         {
             if (string.IsNullOrEmpty(userId))
@@ -216,16 +256,14 @@ namespace cosmosofflinewithLCC.Data
 
             try
             {
-                // Use the partition key directly for efficient querying
-                var queryOptions = new QueryRequestOptions
-                {
-                    PartitionKey = new PartitionKey(userId)
-                };
+                // Use a query to find all items that belong to this user regardless of document type
+                // This searches for any documents with a partitionKey that starts with the userId prefix
+                string queryText = $"SELECT * FROM c WHERE STARTSWITH(c.partitionKey, '{userId}:')";
 
+                Console.WriteLine($"Executing query: {queryText}");
                 var query = _container.GetItemQueryIterator<T>(
-                    queryText: "SELECT * FROM c",
-                    requestOptions: queryOptions
-                );
+                  queryText: queryText
+              );
 
                 while (query.HasMoreResults)
                 {
@@ -233,7 +271,7 @@ namespace cosmosofflinewithLCC.Data
                     items.AddRange(response);
                 }
 
-                Console.WriteLine($"Found {items.Count} items in Cosmos DB for user {userId}");
+                Console.WriteLine($"Found {items.Count} items in Cosmos DB for userId {userId}");
             }
             catch (CosmosException ex)
             {

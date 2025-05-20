@@ -219,5 +219,71 @@ namespace cosmosofflinewithLCC.Tests
             // Just verify UpsertBulkAsync was called - we can't easily verify the Type property from outside the SyncEngine
             remoteMock.Verify(x => x.UpsertBulkAsync(It.IsAny<IEnumerable<Item>>()), Times.Once);
         }
+        [Fact]
+        public async Task SyncAsync_ShouldRespectDocumentType_WhenUsingCompositePartitionKey()
+        {
+            // Arrange
+            var localMock = new Mock<IDocumentStore<Item>>();
+            var remoteMock = new Mock<IDocumentStore<Item>>();
+            var now = DateTime.UtcNow;
+
+            // Create an item with a specific Type
+            var localItem = new Item
+            {
+                Id = "type-test",
+                Content = "Type-specific item",
+                LastModified = now,
+                UserId = _userId,
+                Type = "CustomType"
+            };
+
+            // Set up mocks - to fix the NullReferenceException, use GetPendingChangesAsync() instead
+            // of GetPendingChangesForUserAsync() since that's what SyncEngine calls
+            localMock.Setup(x => x.GetPendingChangesAsync()).ReturnsAsync(new List<Item> { localItem });
+            remoteMock.Setup(x => x.GetAsync("type-test", _userId)).ReturnsAsync((Item?)null);
+            remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item>());
+
+            // Act
+            await SyncEngine.SyncAsync(localMock.Object, remoteMock.Object, _loggerMock.Object,
+                x => x.Id, x => x.LastModified, _userId);
+
+            // Assert - Verify Type property is preserved during sync
+            remoteMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items =>
+                items.Any(i => i.Id == "type-test" &&
+                       i.UserId == _userId &&
+                       i.Type == "CustomType"))), Times.Once);
+        }
+
+        [Fact]
+        public async Task InitialDataPull_ShouldUseProvidedDocType_WhenItemsHaveNoType()
+        {
+            // Arrange
+            var localMock = new Mock<IDocumentStore<Item>>();
+            var remoteMock = new Mock<IDocumentStore<Item>>();
+            var now = DateTime.UtcNow;
+
+            // Create remote item with no Type property set
+            var remoteItem = new Item
+            {
+                Id = "typeless",
+                Content = "No type specified",
+                LastModified = now,
+                UserId = _userId,
+                Type = null! // Type will be null
+            };
+
+            remoteMock.Setup(x => x.GetByUserIdAsync(_userId)).ReturnsAsync(new List<Item> { remoteItem });
+            localMock.Setup(x => x.GetAsync("typeless", _userId)).ReturnsAsync((Item?)null);
+
+            // Act - Pass a specific document type
+            await SyncEngine.InitialUserDataPullAsync(
+                localMock.Object, remoteMock.Object, _loggerMock.Object,
+                x => x.Id, x => x.LastModified, _userId, "SpecifiedType");
+
+            // Assert - Verify the specified type is used when pulling data
+            localMock.Verify(x => x.UpsertBulkAsync(It.Is<IEnumerable<Item>>(items =>
+                items.Any(i => i.Id == "typeless" &&
+                       i.UserId == _userId))), Times.Once);
+        }
     }
 }

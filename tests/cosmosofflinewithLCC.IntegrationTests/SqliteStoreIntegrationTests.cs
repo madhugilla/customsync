@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
-using cosmosofflinewithLCC.Data;
+﻿using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
-using Xunit;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
@@ -72,6 +67,111 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var pendingItems = await store.GetPendingChangesAsync();
 
             Assert.Empty(pendingItems);
+        }
+
+        [Fact]
+        public async Task GetByUserIdAsync_ShouldFilterByUserId()
+        {
+            // Create stores for different types
+            var itemStore = new SqliteStore<Item>(_dbPath);
+            var orderStore = new SqliteStore<Order>(_dbPath);
+
+            // Create and store items for different users
+            var user1 = "user1";
+            var user2 = "user2";
+
+            var user1Item = new Item
+            {
+                Id = "user1_item",
+                Content = "User 1 content",
+                LastModified = DateTime.UtcNow,
+                UserId = user1,
+                Type = "Item"
+            };
+
+            var user2Item = new Item
+            {
+                Id = "user2_item",
+                Content = "User 2 content",
+                LastModified = DateTime.UtcNow,
+                UserId = user2,
+                Type = "Item"
+            };
+
+            var user1Order = new Order
+            {
+                Id = "user1_order",
+                Description = "User 1 order",
+                LastModified = DateTime.UtcNow,
+                UserId = user1,
+                Type = "Order"
+            };
+
+            // Store the items
+            await itemStore.UpsertAsync(user1Item);
+            await itemStore.UpsertAsync(user2Item);
+            await orderStore.UpsertAsync(user1Order);
+
+            // Get items by user ID
+            var user1Items = await itemStore.GetByUserIdAsync(user1);
+            var user2Items = await itemStore.GetByUserIdAsync(user2);
+            var user1Orders = await orderStore.GetByUserIdAsync(user1);
+
+            // Verify results
+            Assert.Single(user1Items);
+            Assert.Equal("user1_item", user1Items[0].Id);
+
+            Assert.Single(user2Items);
+            Assert.Equal("user2_item", user2Items[0].Id);
+
+            Assert.Single(user1Orders);
+            Assert.Equal("user1_order", user1Orders[0].Id);
+        }
+
+        [Fact]
+        public async Task GetPendingChangesForUserAsync_ShouldOnlyReturnUserItems()
+        {
+            // Setup test stores and data
+            var itemStore = new SqliteStore<Item>(_dbPath);
+
+            // Create items for different users
+            var user1 = "user1";
+            var user2 = "user2";
+
+            var user1Item = new Item
+            {
+                Id = "pending1",
+                Content = "Pending User 1",
+                LastModified = DateTime.UtcNow,
+                UserId = user1,
+                Type = "Item"
+            };
+
+            var user2Item = new Item
+            {
+                Id = "pending2",
+                Content = "Pending User 2",
+                LastModified = DateTime.UtcNow,
+                UserId = user2,
+                Type = "Item"
+            };
+
+            // Store the items, which will mark them as pending changes
+            await itemStore.UpsertAsync(user1Item);
+            await itemStore.UpsertAsync(user2Item);
+
+            // Get pending changes by user
+            var user1Pending = await itemStore.GetPendingChangesForUserAsync(user1);
+            var user2Pending = await itemStore.GetPendingChangesForUserAsync(user2);
+
+            // Verify results
+            Assert.Single(user1Pending);
+            Assert.Equal("pending1", user1Pending[0].Id);
+            Assert.Equal(user1, user1Pending[0].UserId);
+
+            Assert.Single(user2Pending);
+            Assert.Equal("pending2", user2Pending[0].Id);
+            Assert.Equal(user2, user2Pending[0].UserId);
         }
     }
 }
