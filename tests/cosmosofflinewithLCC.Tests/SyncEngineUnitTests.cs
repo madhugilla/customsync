@@ -309,5 +309,51 @@ namespace cosmosofflinewithLCC.Tests
                 items.Any(i => i.ID == "typeless" &&
                        i.OIID == _userId))), Times.Once);
         }
+        [Fact]
+        public async Task UpdateUserId_UpdatesUserIdSuccessfully()
+        {            // Arrange
+            var localMock = new Mock<IDocumentStore<Item>>();
+            var remoteMock = new Mock<IDocumentStore<Item>>();
+            var now = DateTime.UtcNow;
+            var newUserId = "user2";
+            var item = new Item { ID = "1", Content = "Test", LastModified = now, OIID = newUserId };
+
+            // Setup empty pending changes to avoid null reference
+            localMock.Setup(x => x.GetPendingChangesAsync())
+                    .ReturnsAsync(new List<Item>());
+
+            remoteMock.Setup(x => x.GetByUserIdAsync(newUserId))
+                     .ReturnsAsync(new List<Item> { item })
+                     .Verifiable();
+
+            var syncEngine = new SyncEngine<Item>(localMock.Object, remoteMock.Object, _loggerMock.Object,
+                x => x.ID, x => x.LastModified, _userId);
+
+            // Act
+            syncEngine.UpdateUserId(newUserId);
+            await syncEngine.SyncAsync();
+
+            // Assert
+            remoteMock.Verify(x => x.GetByUserIdAsync(newUserId), Times.Once);
+            remoteMock.Verify(x => x.GetByUserIdAsync(_userId), Times.Never);
+            remoteMock.VerifyAll();
+        }
+
+        [Fact]
+        public void UpdateUserId_ThrowsException_WhenUserIdIsEmpty()
+        {
+            // Arrange
+            var localMock = new Mock<IDocumentStore<Item>>();
+            var remoteMock = new Mock<IDocumentStore<Item>>();
+            var syncEngine = new SyncEngine<Item>(localMock.Object, remoteMock.Object, _loggerMock.Object,
+                x => x.ID, x => x.LastModified, _userId);
+
+            // Act & Assert
+            var emptyEx = Assert.Throws<ArgumentException>(() => syncEngine.UpdateUserId(string.Empty));
+            Assert.Equal("userId must not be null or empty (Parameter 'userId')", emptyEx.Message);
+
+            var whitespaceEx = Assert.Throws<ArgumentException>(() => syncEngine.UpdateUserId("   "));
+            Assert.Equal("userId must not be null or empty (Parameter 'userId')", whitespaceEx.Message);
+        }
     }
 }

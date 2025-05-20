@@ -14,7 +14,7 @@ namespace cosmosofflinewithLCC.Sync
         private readonly IDocumentStore<TDocument> _local;
         private readonly IDocumentStore<TDocument> _remote;
         private readonly ILogger _logger;
-        private readonly string _userId;
+        private string _userId;  // Changed from readonly to allow updates
         private readonly string _idPropName;
         private readonly string _lastModifiedPropName;
 
@@ -46,6 +46,21 @@ namespace cosmosofflinewithLCC.Sync
             _userId = userId;
             _idPropName = GetPropertyName(idExpression);
             _lastModifiedPropName = GetPropertyName(lastModifiedExpression);
+        }
+
+        /// <summary>
+        /// Updates the user ID for subsequent sync operations
+        /// </summary>
+        /// <param name="userId">The new user ID to use</param>
+        /// <exception cref="ArgumentException">Thrown when userId is null or empty</exception>
+        public void UpdateUserId(string userId)
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty", nameof(userId));
+            }
+            _logger.LogInformation("Updating user ID from {OldUserId} to {NewUserId}", _userId, userId);
+            _userId = userId;
         }
 
         /// <summary>
