@@ -152,11 +152,20 @@ namespace cosmosofflinewithLCC.Sync
                     _logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
                 }
             }
-
             if (itemsToUpsert.Any())
             {
                 await _local.UpsertBulkAsync(itemsToUpsert);
                 _logger.LogInformation("{Count} items pulled during initial data pull", itemsToUpsert.Count);
+
+                // Clear pending change flags for items pulled from remote
+                foreach (var item in itemsToUpsert)
+                {
+                    var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(item)?.ToString();
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        await _local.RemovePendingChangeAsync(id);
+                    }
+                }
             }
 
             _logger.LogInformation("Initial data pull completed for user {UserId}", _userId);
@@ -266,11 +275,20 @@ namespace cosmosofflinewithLCC.Sync
                     _logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
                 }
             }
-
             if (itemsToUpsert.Any())
             {
                 await _local.UpsertBulkAsync(itemsToUpsert);
                 itemsPulled += itemsToUpsert.Count;
+
+                // Clear pending change flags for items pulled from remote
+                foreach (var item in itemsToUpsert)
+                {
+                    var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(item)?.ToString();
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        await _local.RemovePendingChangeAsync(id);
+                    }
+                }
             }
 
             return itemsPulled;

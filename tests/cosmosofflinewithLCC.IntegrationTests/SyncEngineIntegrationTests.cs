@@ -211,15 +211,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            await syncEngine.SyncAsync();
-
-            // Assert
+            await syncEngine.SyncAsync();            // Assert
             Console.WriteLine($"Checking local store for item with ID test2");
             var localItem = await _localStore.GetAsync("test2", _testUserId);
             Assert.NotNull(localItem);
             Assert.Equal(remoteItem.Content, localItem.Content);
             Assert.Equal(_testUserId, localItem.OIID);
             Assert.Equal("Item", localItem.Type); // Verify Type property is set
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
 
         [Fact]
@@ -255,15 +257,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            await syncEngine.SyncAsync();
-
-            // Assert - Remote should be updated with local content since local is newer
+            await syncEngine.SyncAsync();            // Assert - Remote should be updated with local content since local is newer
             var updatedRemoteItem = await _remoteStore.GetAsync("test3", _testUserId);
             Assert.NotNull(updatedRemoteItem);
             Assert.Equal(localItem.Content, updatedRemoteItem.Content);
             Assert.Equal(localItem.LastModified, updatedRemoteItem.LastModified);
             Assert.Equal(_testUserId, updatedRemoteItem.OIID);
             Assert.Equal("Item", updatedRemoteItem.Type); // Verify Type property is set
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
 
         [Fact]
@@ -345,9 +349,12 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.Equal("Item", resolvedConflict1Remote.Type); // Verify Type property is set            // Remote newer should win conflict
             var resolvedConflict2Local = await _localStore.GetAsync("conflict2", _testUserId);
             Assert.NotNull(resolvedConflict2Local);
-            Assert.Equal(remoteNewerItem.Content, resolvedConflict2Local.Content);
-            Assert.Equal(_testUserId, resolvedConflict2Local.OIID);
+            Assert.Equal(remoteNewerItem.Content, resolvedConflict2Local.Content); Assert.Equal(_testUserId, resolvedConflict2Local.OIID);
             Assert.Equal("Item", resolvedConflict2Local.Type); // Verify Type property is set
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
 
         [Fact]
@@ -422,9 +429,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Act
             await syncEngine.SyncAsync();
-            await Task.Delay(500);
-
-            // Assert            // Should only have user1's item in local store
+            await Task.Delay(500);            // Assert            // Should only have user1's item in local store
             var localUser1Item = await _localStore.GetAsync("user1Item", "user1");
             var localUser2Item = await _localStore.GetAsync("user2Item", "user2");
 
@@ -435,6 +440,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // User2's item should not be synced
             Assert.Null(localUser2Item);
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
         [Fact]
         public async Task SyncEngine_ShouldRespectPartitionKey_AndOnlySyncSpecificUserAndType()
@@ -468,14 +477,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // User1's Item should be synced
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);
-            Assert.Equal("user1", localUser1Item.OIID);
-            Assert.Equal("Item", localUser1Item.Type);
+            Assert.Equal("user1", localUser1Item.OIID); Assert.Equal("Item", localUser1Item.Type);
 
             // User2's item should not be synced (different user)
             Assert.Null(localUser2Item);
 
             // User1's Order should not be synced (different type)
             Assert.Null(localUser1ItemDiffType);
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
 
         [Fact]
@@ -524,15 +536,19 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Assert
             var remoteItem = await remoteItemStore.GetAsync(item.ID, _testUserId);
-            var remoteOrder = await remoteOrderStore.GetAsync(order.ID, _testUserId);
-
-            Assert.NotNull(remoteItem);
+            var remoteOrder = await remoteOrderStore.GetAsync(order.ID, _testUserId); Assert.NotNull(remoteItem);
             Assert.Equal(item.Content, remoteItem.Content);
             Assert.Equal("Item", remoteItem.Type);
 
             Assert.NotNull(remoteOrder);
             Assert.Equal(order.Description, remoteOrder.Description);
             Assert.Equal("Order", remoteOrder.Type);
+
+            // Verify pending changes are removed after sync
+            var pendingItemChanges = await localItemStore.GetPendingChangesAsync();
+            var pendingOrderChanges = await localOrderStore.GetPendingChangesAsync();
+            Assert.Empty(pendingItemChanges);
+            Assert.Empty(pendingOrderChanges);
 
             // Cleanup
             if (File.Exists(sqlitePath))
@@ -574,6 +590,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.NotNull(localType1Item);
             Assert.Equal("Type 1 content", localType1Item.Content);
             Assert.Null(localType2Item);
+
+            // Verify no pending changes after initial data pull
+            var pendingChangesInitial = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChangesInitial);
         }
 
         [Fact]
@@ -591,12 +611,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            await syncEngine.SyncAsync();
-
-            // Assert - Should use class name as type
+            await syncEngine.SyncAsync();            // Assert - Should use class name as type
             var remoteItem = await _remoteStore.GetAsync("noTypeItem", _testUserId);
             Assert.NotNull(remoteItem);
             Assert.Equal("Item", remoteItem.Type);
+
+            // Verify pending changes are removed after sync
+            var pendingChangesAfter = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChangesAfter);
         }
         [Fact]
         public void SyncEngine_ShouldHandleEmptyUserId()
@@ -634,13 +656,15 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            await syncEngine.SyncAsync();
-
-            // Assert - Remote version should win as it's newer
+            await syncEngine.SyncAsync();            // Assert - Remote version should win as it's newer
             var finalLocal = await _localStore.GetAsync("concurrentItem", _testUserId);
             Assert.NotNull(finalLocal);
             Assert.Equal("Remote Modified", finalLocal.Content);
             Assert.Equal(now.AddMinutes(1), finalLocal.LastModified);
+
+            // Verify pending changes are removed after sync
+            var pendingChangesAfter = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChangesAfter);
         }
         [Fact]
         public async Task SyncEngine_ShouldHandleInvalidItems()
@@ -655,12 +679,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            await syncEngine.SyncAsync();
-
-            // Assert - Valid item should sync
+            await syncEngine.SyncAsync();            // Assert - Valid item should sync
             var remoteItems = await _remoteStore.GetByUserIdAsync(_testUserId);
             Assert.Single(remoteItems);
             Assert.Equal("valid1", remoteItems.First().ID);
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
 
         [Fact]
@@ -708,15 +734,62 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Act - Update to user2 and sync again
             syncEngine.UpdateUserId(user2);
-            await syncEngine.SyncAsync();
-
-            // Assert - Now user2's item should be in local store
+            await syncEngine.SyncAsync();            // Assert - Now user2's item should be in local store
             localUser1Item = await _localStore.GetAsync("user1-item", user1);
             localUser2Item = await _localStore.GetAsync("user2-item", user2);
             Assert.NotNull(localUser1Item); // Previous items remain
             Assert.NotNull(localUser2Item); // New user's items are synced
             Assert.Equal("User 2 content", localUser2Item.Content);
             Assert.Equal(user2, localUser2Item.OIID);
+
+            // Verify pending changes are removed after sync
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncEngine_ShouldHaveZeroPendingItemsInLocalStore_AfterSync()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+
+            // Create multiple items with pending changes in local store
+            var localItems = new List<Item>
+            {
+                new Item { ID = "pendingItem1", Content = "Pending content 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "pendingItem2", Content = "Pending content 2", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "pendingItem3", Content = "Pending content 3", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Add items to local store which should mark them as pending changes
+            foreach (var item in localItems)
+            {
+                await _localStore.UpsertAsync(item);
+            }
+
+            // Verify we have pending changes before sync
+            var pendingChangesBefore = await _localStore.GetPendingChangesAsync();
+            Assert.Equal(localItems.Count, pendingChangesBefore.Count);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsync();
+            await Task.Delay(500); // Wait for sync to complete
+
+            // Assert
+            // Verify all items were synced to remote store
+            foreach (var localItem in localItems)
+            {
+                var remoteItem = await _remoteStore.GetAsync(localItem.ID, _testUserId);
+                Assert.NotNull(remoteItem);
+                Assert.Equal(localItem.Content, remoteItem.Content);
+            }
+
+            // Verify there are no pending changes in local store after sync
+            var pendingChangesAfter = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChangesAfter);
         }
     }
 }
