@@ -11,8 +11,8 @@ obj/
 *.user
 *.vs
 
-# Azure Functions local settings file
-local.settings.json
+# Azure Functions local settings file - commented out to include in git
+# local.settings.json
 
 # Ignore test results
 TestResults/
