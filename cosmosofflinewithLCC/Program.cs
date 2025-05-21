@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging;
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
-using System.Diagnostics;
 
 namespace cosmosofflinewithLCC
 {
@@ -199,7 +198,7 @@ namespace cosmosofflinewithLCC
                 {
                     ID = "function-test-2",
                     Content = "Function test item created remotely",
-                    LastModified = DateTime.UtcNow.AddMinutes(-5), // Older timestamp to test conflict resolution
+                    LastModified = DateTime.UtcNow.AddMinutes(-10), // Older timestamp to test conflict resolution
                     OIID = userId,
                     Type = "Item"
                 };
