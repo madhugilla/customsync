@@ -129,6 +129,7 @@ namespace cosmosofflinewithLCC
                 logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
 
                 // Perform initial pull for both Item and Order types
+                //syncEngineItem.UpdateUserId(currentUserId); if we want to ovveride the ID
                 await syncEngineItem.InitialUserDataPullAsync("Item");
                 await syncEngineOrder.InitialUserDataPullAsync("Order");
 
@@ -158,6 +159,8 @@ namespace cosmosofflinewithLCC
             await remoteStore.UpsertAsync(remoteItem);
 
             // Sync using the instance-based SyncEngine
+            // if we want to ovveride the ID
+            //syncEngineItem.UpdateUserId(currentUserId); 
             await syncEngineItem.SyncAsync();
 
             // Result for Item
