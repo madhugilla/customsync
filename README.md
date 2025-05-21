@@ -6,6 +6,38 @@ This project demonstrates an offline-first synchronization solution between Azur
 
 The solution provides a bidirectional sync mechanism allowing applications to work offline with a local SQLite database and synchronize with Azure Cosmos DB when connectivity is available. It uses last-modified timestamps to manage conflict resolution.
 
+## Debugging Setup
+
+The project is configured with several debug options:
+
+### Debug Console App with Functions
+This configuration automatically:
+1. Builds the Function App project
+2. Starts the Function App in the background
+3. Builds and runs the Console App
+
+Use this option when you want to test both applications together.
+
+### Debug Console App Only
+Use this configuration when you only want to debug the console application.
+
+### Debug Function App Only
+Use this configuration when you only want to debug the Function App.
+
+### Debug Both Apps
+This is a compound configuration that runs both the Function App and Console App in separate debug sessions.
+
+## Project Structure
+
+- **cosmosofflinewithLCC**: Console application with SQLite local caches
+  - Each test method uses its own SQLite remote store
+  - Test methods perform their own initial data pull checks
+  - FunctionDocumentStore instances are injected through dependency injection
+
+- **RemoteSync**: Azure Function App providing remote synchronization APIs
+  - Uses dotnet-isolated process model
+  - Provides REST API endpoints for remote data access
+
 ### Architecture Diagram
 
 ```mermaid

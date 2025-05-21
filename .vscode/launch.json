@@ -1,4 +1,77 @@
 {
     "version": "0.2.0",
-
+    "configurations": [
+        {            
+            "name": "Debug Console App with Functions",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "start-function-app",
+            "program": "${workspaceFolder}/cosmosofflinewithLCC/bin/Debug/net8.0/cosmosofflinewithLCC.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/cosmosofflinewithLCC",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "env": {
+                "FUNCTION_BASE_URL": "http://localhost:7071",
+                "FUNCTION_KEY": "",
+                "COSMOS_ENDPOINT": "https://localhost:8081/",
+                "COSMOS_KEY": "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==",
+                "CURRENT_USER_ID": "user1"
+            }
+        },
+        {
+            "name": "Attach to .NET Functions",
+            "type": "coreclr",
+            "request": "attach",
+            "processId": "${command:azureFunctions.pickProcess}"
+        },
+        {
+            "name": "Start Function App",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build-function",
+            "program": "${workspaceFolder}/RemoteSync/bin/Debug/net8.0/RemoteSync.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/RemoteSync",
+            "stopAtEntry": false,
+            "console": "internalConsole"
+        },
+        {
+            "name": "Debug Console App Only",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/cosmosofflinewithLCC/bin/Debug/net8.0/cosmosofflinewithLCC.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/cosmosofflinewithLCC",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "env": {
+                "FUNCTION_BASE_URL": "http://localhost:7071",
+                "FUNCTION_KEY": "",
+                "COSMOS_ENDPOINT": "https://localhost:8081/",
+                "COSMOS_KEY": "C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==",
+                "CURRENT_USER_ID": "user1"
+            }
+        },
+        {
+            "name": "Debug Function App Only",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build-function",
+            "program": "${workspaceFolder}/RemoteSync/bin/Debug/net8.0/RemoteSync.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/RemoteSync",
+            "stopAtEntry": false,
+            "console": "internalConsole"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Debug Both Apps",
+            "configurations": ["Start Function App", "Debug Console App Only"],
+            "stopAll": true,
+            "preLaunchTask": "build-all"
+        }
+    ]
 }

@@ -24,6 +24,21 @@ namespace RemoteSync
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
+        // Helper method to filter out Cosmos DB system properties
+        private JsonObject RemoveSystemProperties(JsonObject jsonObject)
+        {
+            var cleanObject = new JsonObject();
+            foreach (var property in jsonObject)
+            {
+                // Skip Cosmos DB system properties (those starting with underscore)
+                if (!property.Key.StartsWith("_"))
+                {
+                    cleanObject.Add(property.Key, property.Value?.DeepClone());
+                }
+            }
+            return cleanObject;
+        }
+
         public CosmosApiRoutes(ILoggerFactory loggerFactory)
         {
             _logger = loggerFactory.CreateLogger<CosmosApiRoutes>();
@@ -81,6 +96,21 @@ namespace RemoteSync
                 using var reader = new StreamReader(response.Content);
                 var documentContent = await reader.ReadToEndAsync();
 
+                // Parse the document to filter out system properties
+                var jsonNode = JsonNode.Parse(documentContent);
+                if (jsonNode is JsonObject jsonObject)
+                {
+                    // Use the helper method to remove system properties
+                    var cleanObject = RemoveSystemProperties(jsonObject);
+
+                    return new ContentResult
+                    {
+                        Content = JsonSerializer.Serialize(cleanObject, _jsonOptions),
+                        ContentType = "application/json",
+                        StatusCode = 200
+                    };
+                }
+
                 return new ContentResult
                 {
                     Content = documentContent,
@@ -137,6 +167,19 @@ namespace RemoteSync
                 using var responseReader = new StreamReader(response.Content);
                 var responseContent = await responseReader.ReadToEndAsync();
 
+                // Filter out system properties from the response
+                var resultNode = JsonNode.Parse(responseContent);
+                if (resultNode is JsonObject resultObject)
+                {
+                    var cleanObject = RemoveSystemProperties(resultObject);
+                    return new ContentResult
+                    {
+                        Content = JsonSerializer.Serialize(cleanObject, _jsonOptions),
+                        ContentType = "application/json",
+                        StatusCode = 200
+                    };
+                }
+
                 return new ContentResult
                 {
                     Content = responseContent,
@@ -172,7 +215,7 @@ namespace RemoteSync
                     return new BadRequestObjectResult("Invalid JSON format. Expected an array of items.");
                 }
 
-                var results = new List<object>();
+                var results = new List<JsonNode>();
 
                 // Process each document
                 foreach (var item in jsonArray)
@@ -200,7 +243,12 @@ namespace RemoteSync
                     var responseContent = await responseReader.ReadToEndAsync();
 
                     var resultNode = JsonNode.Parse(responseContent);
-                    if (resultNode != null)
+                    if (resultNode is JsonObject resultObject)
+                    {
+                        // Filter out system properties
+                        results.Add(RemoveSystemProperties(resultObject));
+                    }
+                    else if (resultNode != null)
                     {
                         results.Add(resultNode);
                     }
@@ -233,16 +281,41 @@ namespace RemoteSync
                 var query = new QueryDefinition("SELECT * FROM c WHERE c.partitionKey = @partitionKey")
                     .WithParameter("@partitionKey", partitionKey);
 
-                var results = new List<dynamic>();
+                var results = new List<JsonNode>();
 
-                using var iterator = _container.GetItemQueryIterator<dynamic>(query);
-                while (iterator.HasMoreResults)
+                // Use stream to preserve exact JSON structure
+                using var feedIterator = _container.GetItemQueryStreamIterator(query);
+                while (feedIterator.HasMoreResults)
                 {
-                    var response = await iterator.ReadNextAsync();
-                    results.AddRange(response);
+                    using var response = await feedIterator.ReadNextAsync();
+                    using var responseStream = response.Content;
+
+                    // Read the response content
+                    using var streamReader = new StreamReader(responseStream);
+                    var responseContent = await streamReader.ReadToEndAsync();
+
+                    // Parse the response as a JsonNode
+                    var jsonResponse = JsonNode.Parse(responseContent);
+                    if (jsonResponse != null && jsonResponse["Documents"] is JsonArray documents)
+                    {
+                        // Add each document to the results, filtering out system properties
+                        foreach (var doc in documents)
+                        {
+                            if (doc is JsonObject jsonObject)
+                            {
+                                results.Add(RemoveSystemProperties(jsonObject));
+                            }
+                        }
+                    }
                 }
 
-                return new OkObjectResult(results);
+                // Return the raw JSON documents
+                return new ContentResult
+                {
+                    Content = JsonSerializer.Serialize(results, _jsonOptions),
+                    ContentType = "application/json",
+                    StatusCode = 200
+                };
             }
             catch (Exception ex)
             {
@@ -260,16 +333,41 @@ namespace RemoteSync
             try
             {
                 var query = new QueryDefinition("SELECT * FROM c");
-                var results = new List<dynamic>();
+                var results = new List<JsonNode>();
 
-                using var iterator = _container.GetItemQueryIterator<dynamic>(query);
-                while (iterator.HasMoreResults)
+                // Use stream to preserve exact JSON structure
+                using var feedIterator = _container.GetItemQueryStreamIterator(query);
+                while (feedIterator.HasMoreResults)
                 {
-                    var response = await iterator.ReadNextAsync();
-                    results.AddRange(response);
+                    using var response = await feedIterator.ReadNextAsync();
+                    using var responseStream = response.Content;
+
+                    // Read the response content
+                    using var streamReader = new StreamReader(responseStream);
+                    var responseContent = await streamReader.ReadToEndAsync();
+
+                    // Parse the response as a JsonNode
+                    var jsonResponse = JsonNode.Parse(responseContent);
+                    if (jsonResponse != null && jsonResponse["Documents"] is JsonArray documents)
+                    {
+                        // Add each document to the results, filtering out system properties
+                        foreach (var doc in documents)
+                        {
+                            if (doc is JsonObject jsonObject)
+                            {
+                                results.Add(RemoveSystemProperties(jsonObject));
+                            }
+                        }
+                    }
                 }
 
-                return new OkObjectResult(results);
+                // Return the raw JSON documents
+                return new ContentResult
+                {
+                    Content = JsonSerializer.Serialize(results, _jsonOptions),
+                    ContentType = "application/json",
+                    StatusCode = 200
+                };
             }
             catch (Exception ex)
             {

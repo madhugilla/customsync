@@ -18,6 +18,18 @@
             }
         },
         {
+            "label": "build-function",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "build",
+                "${workspaceFolder}/RemoteSync/RemoteSync.csproj",
+                "/property:GenerateFullPaths=true",
+                "/consoleloggerparameters:NoSummary"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
             "label": "publish",
             "command": "dotnet",
             "type": "process",
@@ -26,8 +38,22 @@
                 "${workspaceFolder}/New folder.sln",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary"
-            ],
-            "problemMatcher": "$msCompile"
+            ],            "problemMatcher": "$msCompile"
+        },        {
+            "label": "build-all",
+            "dependsOn": ["build-function", "build"],
+            "dependsOrder": "sequence"
+        },        {
+            "label": "start-function-app",
+            "type": "shell",
+            "command": "cd ${workspaceFolder}/RemoteSync && func host start --dotnet-isolated",
+            "isBackground": true,
+            "problemMatcher": "$func-dotnet-watch",
+            "dependsOn": ["build-function"],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
         },
         {
             "label": "test",
@@ -39,8 +65,7 @@
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary"
             ],
-            "problemMatcher": "$msCompile",
-            "group": {
+            "problemMatcher": "$msCompile",            "group": {
                 "kind": "test",
                 "isDefault": true
             }
