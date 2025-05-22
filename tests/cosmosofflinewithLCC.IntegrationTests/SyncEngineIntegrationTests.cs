@@ -3,10 +3,11 @@ using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
-    [Collection("SequentialTests")]
+
     public class SyncEngineIntegrationTests : IDisposable
     {
         private readonly SqliteStore<Item> _localStore;
@@ -21,6 +22,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
         public SyncEngineIntegrationTests()
         {
+            // Generate a unique database path with timestamp to avoid conflicts
+            _dbPath = Path.Combine(Path.GetTempPath(), $"synctest_{Guid.NewGuid()}_{DateTime.Now.Ticks}.sqlite");
+            Console.WriteLine($"Using SQLite database path: {_dbPath}");
+
             // Setup Cosmos DB (using local emulator)
             _cosmosClient = new CosmosClient("AccountEndpoint=https://localhost:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==");
 
@@ -31,8 +36,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 {
                     Console.WriteLine($"Deleting container {_containerId} in database {_databaseId} if it exists");
                     _cosmosClient.GetDatabase(_databaseId).GetContainer(_containerId).DeleteContainerAsync().GetAwaiter().GetResult();
-                    // Wait a moment for the delete to complete
-                    System.Threading.Thread.Sleep(1000);
+                    System.Threading.Thread.Sleep(1000); // Wait for deletion
                 }
                 catch (Exception ex)
                 {
@@ -40,15 +44,25 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     Console.WriteLine($"Container deletion exception (can be ignored if not exists): {ex.Message}");
                 }
 
-                // Create database and container if they don't exist
+                // Create database if it doesn't exist
                 _cosmosClient.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
                 var database = _cosmosClient.GetDatabase(_databaseId);
 
-                Console.WriteLine($"Creating container {_containerId} with partition key path /userId");                // Use composite partitionKey as the partition key path
+                Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");
+
+                // Create container with partitionKey path
                 database.CreateContainerIfNotExistsAsync(
-                    id: _containerId,
-                    partitionKeyPath: "/partitionKey",
-                    throughput: 400).GetAwaiter().GetResult();
+                    new ContainerProperties(_containerId, "/partitionKey")
+                    {
+                        IndexingPolicy = new IndexingPolicy
+                        {
+                            IndexingMode = IndexingMode.Consistent,
+                            IncludedPaths = { new IncludedPath { Path = "/*" } },
+                            ExcludedPaths = { new ExcludedPath { Path = "/partitionKey/?" } }
+                        }
+                    },
+                    throughput: 400
+                ).GetAwaiter().GetResult();
 
                 _container = database.GetContainer(_containerId);
                 Console.WriteLine("CosmosDB sync test container is ready");
@@ -59,8 +73,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 throw;
             }
 
-            // Setup SQLite (using temp file)
-            _dbPath = Path.Combine(Path.GetTempPath(), $"synctest_{Guid.NewGuid()}.sqlite");
+            // Setup SQLite and stores
             _localStore = new SqliteStore<Item>(_dbPath);
             _remoteStore = new CosmosDbStore<Item>(_container);
 
@@ -73,20 +86,51 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
         public void Dispose()
         {
-            // Clean up test resources
-            CleanupTestData().GetAwaiter().GetResult();
-
-            // Delete the SQLite database file
-            if (File.Exists(_dbPath))
+            try
             {
-                try
+                // Clean up test resources
+                CleanupTestData().GetAwaiter().GetResult();
+                // Extra safety: Close all database connections by forcing garbage collection
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
+                // Delete the SQLite database file
+                if (File.Exists(_dbPath))
                 {
-                    File.Delete(_dbPath);
+                    try
+                    {
+                        // Try multiple times with short delays if needed
+                        for (int i = 0; i < 3; i++)
+                        {
+                            try
+                            {
+                                File.Delete(_dbPath);
+                                Console.WriteLine($"Successfully deleted SQLite file: {_dbPath}");
+                                break;
+                            }
+                            catch (IOException)
+                            {
+                                if (i < 2)
+                                {
+                                    Console.WriteLine($"SQLite file in use, waiting before retry: {_dbPath}");
+                                    System.Threading.Thread.Sleep(500);
+                                }
+                                else
+                                {
+                                    throw;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error deleting SQLite file {_dbPath}: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error deleting SQLite file: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in Dispose: {ex.Message}");
             }
         }
 
@@ -94,63 +138,98 @@ namespace cosmosofflinewithLCC.IntegrationTests
         {
             try
             {
-                Console.WriteLine("Cleaning up test data in Cosmos DB...");
+                Console.WriteLine("Cleaning up test data...");
 
-                // Clean up Cosmos DB data - use a query to find all items
-                var query = new QueryDefinition("SELECT c.id, c.partitionKey, c.userId, c.Type FROM c");
-                var itemsToDelete = new List<(string id, string partitionKey)>();
-
-                using var iterator = _container.GetItemQueryIterator<dynamic>(query);
-                while (iterator.HasMoreResults)
+                // Clean up local SQLite data
+                try
                 {
-                    var response = await iterator.ReadNextAsync();
-                    foreach (var item in response)
+                    Console.WriteLine("Cleaning local SQLite store data...");
+                    var localItems = await _localStore.GetAllAsync();
+                    Console.WriteLine($"Found {localItems.Count} items in local store");
+
+                    foreach (var item in localItems)
                     {
-                        string id = item.id;
-                        string partitionKey;
-
-                        if (item.partitionKey != null)
+                        try
                         {
-                            // Use the partitionKey property if it exists
-                            partitionKey = item.partitionKey;
+                            // Remove the pending change flag first
+                            await _localStore.RemovePendingChangeAsync(item.ID);
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            // Fall back to constructing it from userId and Type
-                            string userIdValue = item.userId ?? _testUserId;
-                            string docType = item.Type ?? "Item";
-                            partitionKey = $"{userIdValue}:{docType}";
+                            Console.WriteLine($"Error removing pending change for {item.ID}: {ex.Message}");
                         }
-
-                        itemsToDelete.Add((id, partitionKey));
                     }
                 }
-
-                Console.WriteLine($"Found {itemsToDelete.Count} items to delete in cleanup");
-
-                foreach (var (id, partitionKey) in itemsToDelete)
+                catch (Exception ex)
                 {
-                    try
-                    {
-                        Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
+                    Console.WriteLine($"Error cleaning SQLite data: {ex.Message}");
+                }
 
-                        // Delete using the composite partition key
-                        await _container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
-                    }
-                    catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                // Clean up Cosmos DB data
+                try
+                {
+                    Console.WriteLine("Cleaning up test data in Cosmos DB...");
+
+                    // Clean up Cosmos DB data - use a query to find all items
+                    var query = new QueryDefinition("SELECT c.id, c.partitionKey, c.userId, c.Type FROM c");
+                    var itemsToDelete = new List<(string id, string partitionKey)>();
+
+                    using var iterator = _container.GetItemQueryIterator<dynamic>(query);
+                    while (iterator.HasMoreResults)
                     {
-                        // Ignore if item not found
-                        Console.WriteLine($"Item not found during deletion: {id} in partition {partitionKey}");
+                        var response = await iterator.ReadNextAsync();
+                        foreach (var item in response)
+                        {
+                            string id = item.id;
+                            string partitionKey;
+
+                            if (item.partitionKey != null)
+                            {
+                                // Use the partitionKey property if it exists
+                                partitionKey = item.partitionKey;
+                            }
+                            else
+                            {
+                                // Fall back to constructing it from userId and Type
+                                string userIdValue = item.userId ?? _testUserId;
+                                string docType = item.Type ?? "Item";
+                                partitionKey = $"{userIdValue}:{docType}";
+                            }
+
+                            itemsToDelete.Add((id, partitionKey));
+                        }
                     }
-                    catch (Exception ex)
+
+                    Console.WriteLine($"Found {itemsToDelete.Count} items to delete in Cosmos DB cleanup");
+
+                    foreach (var (id, partitionKey) in itemsToDelete)
                     {
-                        Console.WriteLine($"Error deleting item {id} from partition {partitionKey}: {ex.Message}");
+                        try
+                        {
+                            Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
+
+                            // Delete using the composite partition key
+                            await _container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
+                        }
+                        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        {
+                            // Ignore if item not found
+                            Console.WriteLine($"Item not found during deletion: {id} in partition {partitionKey}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error deleting item {id} from partition {partitionKey}: {ex.Message}");
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error cleaning up Cosmos DB data: {ex.Message}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error cleaning up test data: {ex.Message}");
+                Console.WriteLine($"Error in CleanupTestData: {ex.Message}");
             }
         }
 
@@ -374,8 +453,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     Content = $"Bulk content {i}",
                     LastModified = now.AddSeconds(i), // Each item has a slightly different time
                     OIID = _testUserId,
-                    Type = "Item" // Add Type property
+                    Type = "Item"
                 });
+            }
+
+            // Verify partition keys are correctly set
+            foreach (var item in localItems)
+            {
+                Assert.Equal($"{_testUserId}:Item", item.PartitionKey);
             }
 
             // Add all items to local store
@@ -399,7 +484,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 Assert.NotNull(remoteItem);
                 Assert.Equal(localItem.Content, remoteItem!.Content);
                 Assert.Equal(_testUserId, remoteItem.OIID);
-                Assert.Equal("Item", remoteItem.Type); // Verify Type property is set
+                Assert.Equal("Item", remoteItem.Type);
+                Assert.Equal($"{_testUserId}:Item", remoteItem.PartitionKey);
             }
 
             // Verify pending changes are removed after sync
@@ -456,6 +542,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var user2Item = new Item { ID = "initUser2Item", Content = "User 2 data", LastModified = now, OIID = "user2", Type = "Item" };
             var user1ItemDiffType = new Item { ID = "initUser1ItemOrder", Content = "User 1 order", LastModified = now, OIID = "user1", Type = "Order" };
 
+            // Verify partition keys are correct
+            Assert.Equal("user1:Item", user1Item.PartitionKey);
+            Assert.Equal("user2:Item", user2Item.PartitionKey);
+            Assert.Equal("user1:Order", user1ItemDiffType.PartitionKey);
+
             // Add items to remote store
             await _remoteStore.UpsertAsync(user1Item);
             await _remoteStore.UpsertAsync(user2Item);
@@ -469,7 +560,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, "user1");
 
             await syncEngine.SyncAsync();
-            await Task.Delay(500);            // Assert - Should only sync user1's Items (not Orders or user2's items)
+            await Task.Delay(500);
+
+            // Assert - Should only sync user1's Items (not Orders or user2's items)
             var localUser1Item = await _localStore.GetAsync("initUser1Item", "user1");
             var localUser2Item = await _localStore.GetAsync("initUser2Item", "user2");
             var localUser1ItemDiffType = await _localStore.GetAsync("initUser1ItemOrder", "user1");
@@ -477,7 +570,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // User1's Item should be synced
             Assert.NotNull(localUser1Item);
             Assert.Equal("User 1 data", localUser1Item.Content);
-            Assert.Equal("user1", localUser1Item.OIID); Assert.Equal("Item", localUser1Item.Type);
+            Assert.Equal("user1", localUser1Item.OIID);
+            Assert.Equal("Item", localUser1Item.Type);
+            Assert.Equal("user1:Item", localUser1Item.PartitionKey);
 
             // User2's item should not be synced (different user)
             Assert.Null(localUser2Item);
@@ -790,6 +885,49 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Verify there are no pending changes in local store after sync
             var pendingChangesAfter = await _localStore.GetPendingChangesAsync();
             Assert.Empty(pendingChangesAfter);
+        }
+
+        [Fact]
+        public async Task InitialUserDataPull_DoesNotMarkItemsAsPendingInSqlite()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var remoteItems = new List<Item>
+            {
+                new Item { ID = Guid.NewGuid().ToString(), Content = "Remote1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = Guid.NewGuid().ToString(), Content = "Remote2", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Add items to remote store
+            foreach (var item in remoteItems)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+
+            // Create sync engine
+            var syncEngine = new SyncEngine<Item>(
+                _localStore,
+                _remoteStore,
+                _logger,
+                x => x.ID,
+                x => x.LastModified,
+                _testUserId);
+
+            // Act
+            await syncEngine.InitialUserDataPullAsync("Item");
+
+            // Assert
+            // Verify items exist in local store
+            foreach (var remoteItem in remoteItems)
+            {
+                var localItem = await _localStore.GetAsync(remoteItem.ID, _testUserId);
+                Assert.NotNull(localItem);
+                Assert.Equal(remoteItem.Content, localItem.Content);
+            }
+
+            // Verify no pending changes exist
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
         }
     }
 }

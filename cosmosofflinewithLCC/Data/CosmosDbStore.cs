@@ -39,24 +39,20 @@ namespace cosmosofflinewithLCC.Data
 
             return results;
         }
-
         public async Task<T?> GetAsync(string id, string userId)
         {
             try
             {
-                string docType = typeof(T).Name;
-                var typeProperty = typeof(T).GetProperty("Type");
-                if (typeProperty != null)
-                {
-                    var defaultInstance = new T();
-                    var defaultType = typeProperty.GetValue(defaultInstance)?.ToString();
-                    if (!string.IsNullOrEmpty(defaultType))
-                    {
-                        docType = defaultType;
-                    }
-                }
+                // Create instance with userId to generate partition key
+                var instance = new T();
+                _userIdProp.SetValue(instance, userId);
 
-                string partitionKey = $"{userId}:{docType}";
+                var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
+                    throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
+
+                string partitionKey = partitionKeyProp.GetValue(instance)?.ToString() ??
+                    throw new InvalidOperationException("PartitionKey cannot be null");
+
                 var result = await _container.ReadItemAsync<T>(
                     id: id,
                     partitionKey: new PartitionKey(partitionKey)
@@ -68,22 +64,20 @@ namespace cosmosofflinewithLCC.Data
                 return null;
             }
         }
-
         public async Task<List<T>> GetByUserIdAsync(string userId)
         {
             var results = new List<T>();
-            string docType = typeof(T).Name;
-            var typeProperty = typeof(T).GetProperty("Type");
-            if (typeProperty != null)
-            {
-                var defaultInstance = new T();
-                var defaultType = typeProperty.GetValue(defaultInstance)?.ToString();
-                if (!string.IsNullOrEmpty(defaultType))
-                {
-                    docType = defaultType;
-                }
-            }            // Query for items using the exact partition key
-            string partitionKey = $"{userId}:{docType}";
+
+            // Create instance with userId to generate partition key
+            var instance = new T();
+            _userIdProp.SetValue(instance, userId);
+
+            var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
+                throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
+
+            string partitionKey = partitionKeyProp.GetValue(instance)?.ToString() ??
+                throw new InvalidOperationException("PartitionKey cannot be null");
+
             var query = _container.GetItemQueryIterator<T>(
                 new QueryDefinition("SELECT * FROM c WHERE c.partitionKey = @partitionKey")
                 .WithParameter("@partitionKey", partitionKey)
@@ -98,33 +92,35 @@ namespace cosmosofflinewithLCC.Data
             return results;
         }
 
-        public async Task UpsertAsync(T document)
+        public Task UpsertAsync(T document)
         {
-            // Get the ID and userId from the document
+            return UpsertAsync(document, true);
+        }
+
+        public async Task UpsertAsync(T document, bool markAsPending)
+        {
+            // Validate document has required properties
             string id = _idProp.GetValue(document)?.ToString() ?? throw new System.Exception("Document must have Id");
-            string userId = _userIdProp.GetValue(document)?.ToString() ?? throw new System.Exception("Document must have UserId");
 
-            // Get document type from the Type property or class name
-            string docType = _typeProp.GetValue(document)?.ToString() ?? string.Empty;
-            if (string.IsNullOrEmpty(docType))
-            {
-                // Fallback to class name if Type property is empty
-                docType = typeof(T).Name;
-            }
+            // Get partition key from document
+            var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
+                throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
 
-            // Create composite partition key
-            string partitionKey = $"{userId}:{docType}";
+            string partitionKey = partitionKeyProp.GetValue(document)?.ToString() ??
+                throw new InvalidOperationException("PartitionKey cannot be null");
 
-            // First serialize to JsonNode to add the partitionKey
+            // Serialize document
             string json = JsonSerializer.Serialize(document, _jsonOptions);
             var jsonNode = JsonNode.Parse(json);
             if (jsonNode is JsonObject jsonObject)
             {
-                // Add the composite partition key
+                // Add the partition key
                 jsonObject[COSMOS_PARTITION_KEY_NAME] = partitionKey;
 
                 // Serialize back to string with added partitionKey
-                string finalJson = jsonObject.ToJsonString(_jsonOptions);                // Use stream overload to preserve exact JSON structure
+                string finalJson = jsonObject.ToJsonString(_jsonOptions);
+
+                // Use stream overload to preserve exact JSON structure
                 using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(finalJson));
                 await _container.UpsertItemStreamAsync(
                     streamPayload: stream,
@@ -133,12 +129,23 @@ namespace cosmosofflinewithLCC.Data
             }
         }
 
-        public async Task UpsertBulkAsync(IEnumerable<T> documents)
+        public Task UpsertBulkAsync(IEnumerable<T> documents)
+        {
+            return UpsertBulkAsync(documents, true);
+        }
+
+        public async Task UpsertBulkAsync(IEnumerable<T> documents, bool markAsPending)
         {
             foreach (var document in documents)
             {
-                await UpsertAsync(document);
+                await UpsertAsync(document, markAsPending);
             }
+        }
+
+        public Task UpsertBulkWithoutPendingAsync(IEnumerable<T> documents)
+        {
+            // For remote store, this is the same as regular UpsertBulkAsync since we don't track pending changes
+            return UpsertBulkAsync(documents);
         }
 
         public virtual Task<List<T>> GetPendingChangesAsync()

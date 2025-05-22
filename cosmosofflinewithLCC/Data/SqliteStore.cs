@@ -81,10 +81,15 @@ namespace cosmosofflinewithLCC.Data
             }
             return null;
         }
-        public async Task UpsertAsync(T document)
+        public Task UpsertAsync(T document)
+        {
+            return UpsertAsync(document, true);
+        }
+
+        public async Task UpsertAsync(T document, bool markAsPending)
         {
             var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
-            var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");            // Extract the OIID for SQL indexing
+            var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
             string? userId = null;
             var userIdProp = typeof(T).GetProperty("OIID");
             if (userIdProp != null)
@@ -101,16 +106,26 @@ namespace cosmosofflinewithLCC.Data
                                ON CONFLICT(ID) DO UPDATE SET 
                                Content = @content, 
                                LastModified = @lastModified,
-                               OIID = @userId;
-                               
+                               OIID = @userId;";
+
+            if (markAsPending)
+            {
+                cmd.CommandText += $@"
                                INSERT OR IGNORE INTO PendingChanges_{_tableName} (ID) VALUES (@id);";
+            }
+
             cmd.Parameters.AddWithValue("@id", id);
             cmd.Parameters.AddWithValue("@content", json);
             cmd.Parameters.AddWithValue("@lastModified", lastModified);
             cmd.Parameters.AddWithValue("@userId", userId ?? (object)DBNull.Value);
             await cmd.ExecuteNonQueryAsync();
         }
-        public async Task UpsertBulkAsync(IEnumerable<T> documents)
+        public Task UpsertBulkAsync(IEnumerable<T> documents)
+        {
+            return UpsertBulkAsync(documents, true);
+        }
+
+        public async Task UpsertBulkAsync(IEnumerable<T> documents, bool markAsPending)
         {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
@@ -119,7 +134,7 @@ namespace cosmosofflinewithLCC.Data
             foreach (var document in documents)
             {
                 var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
-                var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");                // Extract the OIID for SQL indexing
+                var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
                 string? userId = null;
                 var userIdProp = typeof(T).GetProperty("OIID");
                 if (userIdProp != null)
@@ -135,9 +150,49 @@ namespace cosmosofflinewithLCC.Data
                                     ON CONFLICT(ID) DO UPDATE SET 
                                     Content = @content, 
                                     LastModified = @lastModified,
-                                    OIID = @userId;
-                                    
+                                    OIID = @userId;";
+
+                if (markAsPending)
+                {
+                    cmd.CommandText += $@"
                                     INSERT OR IGNORE INTO PendingChanges_{_tableName} (ID) VALUES (@id);";
+                }
+
+                cmd.Parameters.AddWithValue("@id", id);
+                cmd.Parameters.AddWithValue("@content", json);
+                cmd.Parameters.AddWithValue("@lastModified", lastModified);
+                cmd.Parameters.AddWithValue("@userId", userId ?? (object)DBNull.Value);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            await transaction.CommitAsync();
+        }
+        public async Task UpsertBulkWithoutPendingAsync(IEnumerable<T> documents)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
+
+            foreach (var document in documents)
+            {
+                var id = _idProp.GetValue(document)?.ToString() ?? throw new Exception("Id required");
+                var lastModified = _lastModifiedProp.GetValue(document)?.ToString() ?? throw new Exception("LastModified required");
+                string? userId = null;
+                var userIdProp = typeof(T).GetProperty("OIID");
+                if (userIdProp != null)
+                {
+                    userId = userIdProp.GetValue(document)?.ToString();
+                }
+
+                var json = System.Text.Json.JsonSerializer.Serialize(document);
+
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = $@"INSERT INTO [{_tableName}] (ID, Content, LastModified, OIID) 
+                                    VALUES (@id, @content, @lastModified, @userId) 
+                                    ON CONFLICT(ID) DO UPDATE SET 
+                                    Content = @content, 
+                                    LastModified = @lastModified,
+                                    OIID = @userId;";
                 cmd.Parameters.AddWithValue("@id", id);
                 cmd.Parameters.AddWithValue("@content", json);
                 cmd.Parameters.AddWithValue("@lastModified", lastModified);

@@ -13,5 +13,7 @@ namespace cosmosofflinewithLCC.Models
         [JsonPropertyName("type")]
         public string Type { get; set; } = "Order";
 
+        [JsonPropertyName("partitionKey")]
+        public string PartitionKey => $"{OIID}:{Type ?? GetType().Name}";
     }
 }

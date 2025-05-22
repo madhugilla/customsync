@@ -154,18 +154,9 @@ namespace cosmosofflinewithLCC.Sync
             }
             if (itemsToUpsert.Any())
             {
-                await _local.UpsertBulkAsync(itemsToUpsert);
+                // Don't mark initial remote data as pending changes
+                await _local.UpsertBulkAsync(itemsToUpsert, false);
                 _logger.LogInformation("{Count} items pulled during initial data pull", itemsToUpsert.Count);
-
-                // Clear pending change flags for items pulled from remote
-                foreach (var item in itemsToUpsert)
-                {
-                    var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(item)?.ToString();
-                    if (!string.IsNullOrEmpty(id))
-                    {
-                        await _local.RemovePendingChangeAsync(id);
-                    }
-                }
             }
 
             _logger.LogInformation("Initial data pull completed for user {UserId}", _userId);
@@ -204,12 +195,13 @@ namespace cosmosofflinewithLCC.Sync
 
                 // Always use efficient point read with partition key
                 _logger.LogInformation("Using efficient point read with partition key for item {Id}", id);
-                var remoteItem = await _remote.GetAsync(id, _userId);
-
-                var localLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localChange) as DateTime?;
+                var remoteItem = await _remote.GetAsync(id, _userId); var localLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localChange) as DateTime?;
                 var remoteLast = remoteItem != null ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime? : null;
 
-                if (remoteItem == null || (localLast.HasValue && remoteLast.HasValue && localLast > remoteLast))
+                var shouldUpdate = remoteItem == null ||
+                    (localLast.HasValue && (!remoteLast.HasValue || localLast.Value > remoteLast.Value));
+
+                if (shouldUpdate)
                 {
                     _logger.LogInformation(remoteItem == null ? "Preparing new item with Id {Id} for remote" : "Preparing update for item with Id {Id} on remote as local is newer", id);
                     itemsToUpsert.Add(localChange);
@@ -221,10 +213,9 @@ namespace cosmosofflinewithLCC.Sync
 
                 idsToRemove.Add(id);
             }
-
             if (itemsToUpsert.Any())
             {
-                await _remote.UpsertBulkAsync(itemsToUpsert);
+                await _remote.UpsertBulkAsync(itemsToUpsert, true);
                 itemsPushed += itemsToUpsert.Count;
             }
 
@@ -277,34 +268,24 @@ namespace cosmosofflinewithLCC.Sync
             }
             if (itemsToUpsert.Any())
             {
-                await _local.UpsertBulkAsync(itemsToUpsert);
+                // Don't mark remote changes as pending when pulling them to local
+                await _local.UpsertBulkAsync(itemsToUpsert, false);
                 itemsPulled += itemsToUpsert.Count;
-
-                // Clear pending change flags for items pulled from remote
-                foreach (var item in itemsToUpsert)
-                {
-                    var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(item)?.ToString();
-                    if (!string.IsNullOrEmpty(id))
-                    {
-                        await _local.RemovePendingChangeAsync(id);
-                    }
-                }
             }
 
             return itemsPulled;
         }
 
         private static void EnsureCommonProperties(TDocument document, string userId, string docType)
-        {
-            // Set the userId if the property exists
-            var userIdProp = typeof(TDocument).GetProperty("UserId");
+        {            // Set the OIID (User ID) if the property exists
+            var userIdProp = typeof(TDocument).GetProperty("OIID");
             if (userIdProp != null && userIdProp.CanWrite)
             {
                 userIdProp.SetValue(document, userId);
             }
             else
             {
-                Console.WriteLine($"WARNING: UserId property not found on type {typeof(TDocument).Name}");
+                Console.WriteLine($"WARNING: OIID property not found on type {typeof(TDocument).Name}");
             }
 
             // Set the type property if it exists

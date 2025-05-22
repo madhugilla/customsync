@@ -5,6 +5,7 @@ namespace cosmosofflinewithLCC.Data
         Task<T?> GetAsync(string id, string userId); // Efficient point read with partition key
         Task UpsertAsync(T document);
         Task UpsertBulkAsync(IEnumerable<T> documents);
+        Task UpsertBulkAsync(IEnumerable<T> documents, bool markAsPending);
         Task<List<T>> GetAllAsync();
         Task<List<T>> GetPendingChangesAsync(); // For local store
         Task RemovePendingChangeAsync(string id);  // For local store
