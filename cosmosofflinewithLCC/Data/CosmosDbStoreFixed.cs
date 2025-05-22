@@ -165,6 +165,7 @@ namespace cosmosofflinewithLCC.Data
 
             return result;
         }
+
         public Task UpsertAsync(T document)
         {
             return UpsertAsync(document, true);
@@ -195,33 +196,54 @@ namespace cosmosofflinewithLCC.Data
                 partitionKey: new PartitionKey(partitionKey)
             );
         }
+
         public Task UpsertBulkAsync(IEnumerable<T> documents)
         {
             return UpsertBulkAsync(documents, true);
         }
+
         public async Task UpsertBulkAsync(IEnumerable<T> documents, bool markAsPending)
         {
-            // Since batch operations are having issues, let's use individual upsert operations
-            // This is less efficient but more reliable until we can fix the batch operation
-            var tasks = new List<Task>();
-
-            foreach (var document in documents)
-            {
-                // We can use the existing UpsertAsync method which is working correctly
-                tasks.Add(UpsertAsync(document, markAsPending));
-
-                // To avoid overwhelming the service, limit concurrent operations
-                if (tasks.Count >= 100)
+            // Group documents by partition key for more efficient bulk operations
+            var documentGroups = documents
+                .GroupBy(doc =>
                 {
-                    await Task.WhenAll(tasks);
-                    tasks.Clear();
-                }
-            }
+                    var partitionKeyProp = typeof(T).GetProperty("PartitionKey");
+                    return partitionKeyProp?.GetValue(doc)?.ToString() ?? string.Empty;
+                })
+                .Where(g => !string.IsNullOrEmpty(g.Key))
+                .ToList();
 
-            // Wait for any remaining operations to complete
-            if (tasks.Count > 0)
+            // Process each partition key group
+            foreach (var group in documentGroups)
             {
-                await Task.WhenAll(tasks);
+                string partitionKey = group.Key;
+
+                // Process in batches of 100 (Cosmos DB transactional batch limit)
+                foreach (var batch in group.Chunk(100))
+                {
+                    var transactionalBatch = _container.CreateTransactionalBatch(
+                        new PartitionKey(partitionKey));
+
+                    foreach (var document in batch)
+                    {
+                        string id = _idProp.GetValue(document)?.ToString() ??
+                            throw new Exception("Document must have Id");
+
+                        // Simply add the document object directly - the SDK will handle serialization
+                        // This avoids manual manipulation of the JSON and lets CosmosDB handle it
+                        transactionalBatch.UpsertItem<T>(document);
+                    }
+
+                    // Execute the batch
+                    using TransactionalBatchResponse batchResponse =
+                        await transactionalBatch.ExecuteAsync();
+
+                    if (!batchResponse.IsSuccessStatusCode)
+                    {
+                        throw new Exception($"Batch operation failed with status code {batchResponse.StatusCode}: {batchResponse.ErrorMessage}");
+                    }
+                }
             }
         }
 

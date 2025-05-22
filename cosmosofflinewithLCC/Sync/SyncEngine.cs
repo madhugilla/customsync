@@ -74,21 +74,21 @@ namespace cosmosofflinewithLCC.Sync
 
             try
             {
-                // Push local pending changes to remote
+                // Push local changes to remote
                 int itemsPushed = await PushPendingChanges();
+                _logger.LogInformation("Pushed {Count} local changes to remote store", itemsPushed);
 
                 // Pull remote changes to local
                 int itemsPulled = await PullRemoteChanges();
+                _logger.LogInformation("Pulled {Count} changes from remote store", itemsPulled);
 
                 stopwatch.Stop();
-                _logger.LogInformation("Sync process completed successfully for type {Type} and user {UserId} in {ElapsedMilliseconds} ms",
-                    typeof(TDocument).Name, _userId, stopwatch.ElapsedMilliseconds);
-                _logger.LogInformation("Metrics: {ItemsPushed} items pushed, {ItemsPulled} items pulled, {ItemsSkipped} items skipped",
-                    itemsPushed, itemsPulled, itemsSkipped);
+                _logger.LogInformation("Sync completed in {ElapsedMilliseconds}ms. Pushed: {ItemsPushed}, Pulled: {ItemsPulled}, Skipped: {ItemsSkipped}",
+                    stopwatch.ElapsedMilliseconds, itemsPushed, itemsPulled, itemsSkipped);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred during the sync process for type {Type} and user {UserId}", typeof(TDocument).Name, _userId);
+                _logger.LogError(ex, "Error occurred during sync: {Message}", ex.Message);
                 throw;
             }
         }
@@ -120,37 +120,24 @@ namespace cosmosofflinewithLCC.Sync
                 if (id == null) continue;
 
                 // Always use efficient point read with partition key
-                TDocument? localItem = await _local.GetAsync(id, _userId);
+                var localItem = await _local.GetAsync(id, _userId);
 
                 var remoteLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
-                var localLast = localItem != null
-                    ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localItem) as DateTime?
-                    : null;
+                var localLast = localItem != null ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localItem) as DateTime? : null;
 
-                if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
+                // Type is dynamic - get or infer it
+                string typeValue = docType;
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
                 {
-                    _logger.LogInformation(localItem == null
-                        ? "Preparing new item with Id {Id} for local"
-                        : "Preparing update for item with Id {Id} on local as remote is newer", id);
-
-                    // Check if Type property exists and use it, otherwise use the provided docType
-                    var typeProp = typeof(TDocument).GetProperty("Type");
-                    string typeValue = docType;
-                    if (typeProp != null)
+                    var currentTypeValue = typeProp.GetValue(remoteItem)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
                     {
-                        var currentTypeValue = typeProp.GetValue(remoteItem)?.ToString();
-                        if (!string.IsNullOrEmpty(currentTypeValue))
-                        {
-                            typeValue = currentTypeValue;
-                        }
+                        typeValue = currentTypeValue;
                     }
-                    EnsureCommonProperties(remoteItem, _userId, typeValue);
-                    itemsToUpsert.Add(remoteItem);
                 }
-                else
-                {
-                    _logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
-                }
+                EnsureCommonProperties(remoteItem, _userId, typeValue);
+                itemsToUpsert.Add(remoteItem);
             }
             if (itemsToUpsert.Any())
             {
@@ -168,9 +155,20 @@ namespace cosmosofflinewithLCC.Sync
             var pendingChanges = await _local.GetPendingChangesAsync();
             _logger.LogInformation("Found {Count} pending changes to sync to remote", pendingChanges.Count);
 
+            // Optimization: Quit early if no pending changes
+            if (pendingChanges.Count == 0)
+            {
+                return 0;
+            }
+
             var itemsToUpsert = new List<TDocument>();
             var idsToRemove = new List<string>();
 
+            // Extract all document ids for batch retrieval
+            var documentIds = new List<string>();
+            var idToLocalChangesMap = new Dictionary<string, TDocument>();
+
+            // First pass: Set common properties and extract IDs
             foreach (var localChange in pendingChanges)
             {
                 // Get or infer the document type
@@ -193,17 +191,51 @@ namespace cosmosofflinewithLCC.Sync
                     continue;
                 }
 
-                // Always use efficient point read with partition key
-                _logger.LogInformation("Using efficient point read with partition key for item {Id}", id);
-                var remoteItem = await _remote.GetAsync(id, _userId); var localLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localChange) as DateTime?;
-                var remoteLast = remoteItem != null ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime? : null;
+                // Add ID to our list for batch retrieval
+                documentIds.Add(id);
+                idToLocalChangesMap[id] = localChange;
+            }
+
+            // Optimization: Batch retrieve all remote items in one query
+            Dictionary<string, TDocument> remoteItemsById = new Dictionary<string, TDocument>();
+
+            if (_remote is CosmosDbStore<TDocument> cosmosStore)
+            {
+                _logger.LogInformation("Using bulk operation to retrieve {Count} remote items", documentIds.Count);
+                remoteItemsById = await cosmosStore.GetItemsByIdsAsync(documentIds, _userId);
+            }
+            else
+            {
+                // Fall back to individual fetches if not using CosmosDbStore
+                foreach (var id in documentIds)
+                {
+                    var remoteItem = await _remote.GetAsync(id, _userId);
+                    if (remoteItem != null)
+                    {
+                        remoteItemsById[id] = remoteItem;
+                    }
+                }
+            }
+
+            // Second pass: Compare and determine which items need to be updated
+            foreach (var id in documentIds)
+            {
+                var localChange = idToLocalChangesMap[id];
+                remoteItemsById.TryGetValue(id, out var remoteItem);
+
+                var localLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localChange) as DateTime?;
+                var remoteLast = remoteItem != null
+                    ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime?
+                    : null;
 
                 var shouldUpdate = remoteItem == null ||
                     (localLast.HasValue && (!remoteLast.HasValue || localLast.Value > remoteLast.Value));
 
                 if (shouldUpdate)
                 {
-                    _logger.LogInformation(remoteItem == null ? "Preparing new item with Id {Id} for remote" : "Preparing update for item with Id {Id} on remote as local is newer", id);
+                    _logger.LogInformation(remoteItem == null ?
+                        "Preparing new item with Id {Id} for remote" :
+                        "Preparing update for item with Id {Id} on remote as local is newer", id);
                     itemsToUpsert.Add(localChange);
                 }
                 else
@@ -213,12 +245,15 @@ namespace cosmosofflinewithLCC.Sync
 
                 idsToRemove.Add(id);
             }
+
+            // Perform bulk upsert for all items needing update
             if (itemsToUpsert.Any())
             {
                 await _remote.UpsertBulkAsync(itemsToUpsert, true);
                 itemsPushed += itemsToUpsert.Count;
             }
 
+            // Remove all items from pending changes
             foreach (var id in idsToRemove)
             {
                 await _local.RemovePendingChangeAsync(id);
@@ -230,54 +265,57 @@ namespace cosmosofflinewithLCC.Sync
         private async Task<int> PullRemoteChanges()
         {
             int itemsPulled = 0;
-
-            // Get remote items for the specific user
-            _logger.LogInformation("Retrieving items for user {UserId} from remote store", _userId);
             var remoteItems = await _remote.GetByUserIdAsync(_userId);
-            _logger.LogInformation("Retrieved {Count} items for user {UserId} from remote store", remoteItems.Count, _userId);
-
-            _logger.LogInformation("Found {Count} items on remote to sync to local", remoteItems.Count);
+            _logger.LogInformation("Retrieved {Count} items from remote store for user {UserId}", remoteItems.Count, _userId);
 
             var itemsToUpsert = new List<TDocument>();
 
             foreach (var remoteItem in remoteItems)
             {
                 if (remoteItem == null) continue;
+
+                string docType = typeof(TDocument).Name;
                 var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(remoteItem)?.ToString();
+                if (id == null) continue;
 
-                // Always use efficient point read with partition key
-                TDocument? localItem = null;
-                if (id != null)
-                {
-                    _logger.LogInformation("Using efficient point read with userId for local item {Id}", id);
-                    localItem = await _local.GetAsync(id, _userId);
-                }
+                var localItem = await _local.GetAsync(id, _userId);
 
+                // Get timestamps for conflict resolution
                 var remoteLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
                 var localLast = localItem != null ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localItem) as DateTime? : null;
 
+                // Type is dynamic - get or infer it
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
+                {
+                    var currentTypeValue = typeProp.GetValue(remoteItem)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
+                    {
+                        docType = currentTypeValue;
+                    }
+                }
+
+                // Last-write-wins strategy
                 if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
                 {
-                    _logger.LogInformation(localItem == null ? "Preparing new item with Id {Id} for local" : "Preparing update for item with Id {Id} on local as remote is newer", id);
+                    EnsureCommonProperties(remoteItem, _userId, docType);
                     itemsToUpsert.Add(remoteItem);
-                }
-                else
-                {
-                    _logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
+                    itemsPulled++;
                 }
             }
+
             if (itemsToUpsert.Any())
             {
-                // Don't mark remote changes as pending when pulling them to local
+                // Don't mark these as pending changes to avoid cyclic syncing
                 await _local.UpsertBulkAsync(itemsToUpsert, false);
-                itemsPulled += itemsToUpsert.Count;
             }
 
             return itemsPulled;
         }
 
         private static void EnsureCommonProperties(TDocument document, string userId, string docType)
-        {            // Set the OIID (User ID) if the property exists
+        {
+            // Set OIID property (userId) if available
             var userIdProp = typeof(TDocument).GetProperty("OIID");
             if (userIdProp != null && userIdProp.CanWrite)
             {
@@ -285,10 +323,10 @@ namespace cosmosofflinewithLCC.Sync
             }
             else
             {
-                Console.WriteLine($"WARNING: OIID property not found on type {typeof(TDocument).Name}");
+                throw new InvalidOperationException($"Type {typeof(TDocument).Name} must have writable OIID property");
             }
 
-            // Set the type property if it exists
+            // Set Type property if available
             var typeProp = typeof(TDocument).GetProperty("Type");
             if (typeProp != null && typeProp.CanWrite)
             {
@@ -304,11 +342,10 @@ namespace cosmosofflinewithLCC.Sync
             }
             else if (propertyExpression.Body is UnaryExpression unaryExpression && unaryExpression.Operand is MemberExpression unaryMemberExpression)
             {
-                // Handle cases where the expression is wrapped in a Convert or similar unary operation
                 return unaryMemberExpression.Member.Name;
             }
 
-            throw new ArgumentException("Invalid property expression. Ensure the expression is a simple property access, e.g., x => x.PropertyName.");
+            throw new ArgumentException("Expression must be a property access expression", nameof(propertyExpression));
         }
     }
 }
