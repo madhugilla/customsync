@@ -106,63 +106,65 @@ namespace cosmosofflinewithLCC
                             x => x.LastModified,
                             currentUserId);
                     });
+
+                    // Register ItemService
+                    services.AddScoped<ItemService>();
                 })
                 .Build();
 
             // Get the required services
             using var serviceScope = host.Services.CreateScope();
-            var syncEngineItem = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Item>>();
+            var itemService = serviceScope.ServiceProvider.GetRequiredService<ItemService>();
             var syncEngineOrder = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Order>>();
             var logger = serviceScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            var localStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Item>>();
-            var remoteStore = serviceScope.ServiceProvider.GetRequiredService<CosmosDbStore<Item>>();
+            // var localStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Item>>(); // Now in ItemService
+            // var remoteStore = serviceScope.ServiceProvider.GetRequiredService<CosmosDbStore<Item>>(); // Now in ItemService
 
             // Set the current user ID - in a real app this would come from authentication
             string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
 
             // Check if this is the first launch by checking if the SQLite DB exists and has any data
             string sqlitePath = "local.db";
-            bool isFirstLaunch = !File.Exists(sqlitePath) || await IsLocalDbEmpty(localStore);
+            bool isFirstLaunch = !File.Exists(sqlitePath) || await itemService.IsLocalStoreEmptyAsync();
 
             if (isFirstLaunch)
             {
                 logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
 
-                // Perform initial pull for both Item and Order types
-                await syncEngineItem.InitialUserDataPullAsync("Item");
+                // Perform initial pull for Item type using ItemService
+                await itemService.InitialDataPullAsync();
+                // Perform initial pull for Order type
                 await syncEngineOrder.InitialUserDataPullAsync("Order");
 
                 logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
             }
 
-            // Simulate offline change for Item
+            // Simulate offline change for Item using ItemService
             var item = new Item()
             {
                 ID = "1",
                 Content = "Local version",
-                LastModified = DateTime.UtcNow,
-                OIID = currentUserId,
-                Type = "Item"
+                LastModified = DateTime.UtcNow
+                // OIID and Type will be set by ItemService
             };
-            await localStore.UpsertAsync(item);
+            await itemService.AddOrUpdateLocalItemAsync(item);
 
-            // Simulate remote change (conflict) for Item
+            // Simulate remote change (conflict) for Item using ItemService
             var remoteItem = new Item()
             {
                 ID = "1",
                 Content = "Remote version",
-                LastModified = DateTime.UtcNow.AddMinutes(-10),
-                OIID = currentUserId,
-                Type = "Item"
+                LastModified = DateTime.UtcNow.AddMinutes(-10)
+                // OIID and Type will be set by ItemService
             };
-            await remoteStore.UpsertAsync(remoteItem);
+            await itemService.AddOrUpdateRemoteItemAsync(remoteItem);
 
-            // Sync using the instance-based SyncEngine
-            await syncEngineItem.SyncAsync();
+            // Sync using ItemService
+            await itemService.SyncItemsAsync();
 
-            // Result for Item
-            var syncedRemote = await remoteStore.GetAsync("1", currentUserId);
-            var syncedLocal = await localStore.GetAsync("1", currentUserId);
+            // Result for Item using ItemService
+            var syncedRemote = await itemService.GetRemoteItemAsync("1");
+            var syncedLocal = await itemService.GetLocalItemAsync("1");
             Console.WriteLine($"Remote Content: {syncedRemote?.Content}");
             Console.WriteLine($"Local Content: {syncedLocal?.Content}");
 
