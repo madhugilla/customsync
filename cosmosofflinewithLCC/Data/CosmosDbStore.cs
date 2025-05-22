@@ -43,15 +43,19 @@ namespace cosmosofflinewithLCC.Data
         {
             try
             {
-                // Create instance with userId to generate partition key
+                // Create instance with userId and type to generate partition key
                 var instance = new T();
                 _userIdProp.SetValue(instance, userId);
+                _typeProp.SetValue(instance, typeof(T).Name); // Set the Type property
 
                 var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
                     throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
 
+                // The 'partitionKey' string's format, including any colons (e.g., "userId:Type"),
+                // is determined by the implementation of the 'PartitionKey' property getter in the model class T.
+                // This store assumes the model's PartitionKey property correctly combines OIID and Type.
                 string partitionKey = partitionKeyProp.GetValue(instance)?.ToString() ??
-                    throw new InvalidOperationException("PartitionKey cannot be null");
+                    throw new InvalidOperationException("PartitionKey cannot be null or empty after setting OIID and Type.");
 
                 var result = await _container.ReadItemAsync<T>(
                     id: id,
@@ -68,15 +72,19 @@ namespace cosmosofflinewithLCC.Data
         {
             var results = new List<T>();
 
-            // Create instance with userId to generate partition key
+            // Create instance with userId and type to generate partition key
             var instance = new T();
             _userIdProp.SetValue(instance, userId);
+            _typeProp.SetValue(instance, typeof(T).Name); // Set the Type property
 
             var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
                 throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
 
+            // The 'partitionKey' string's format, including any colons (e.g., "userId:Type"),
+            // is determined by the implementation of the 'PartitionKey' property getter in the model class T.
+            // This store assumes the model's PartitionKey property correctly combines OIID and Type.
             string partitionKey = partitionKeyProp.GetValue(instance)?.ToString() ??
-                throw new InvalidOperationException("PartitionKey cannot be null");
+                throw new InvalidOperationException("PartitionKey cannot be null or empty after setting OIID and Type.");
 
             var query = _container.GetItemQueryIterator<T>(
                 new QueryDefinition("SELECT * FROM c WHERE c.partitionKey = @partitionKey")
@@ -106,6 +114,9 @@ namespace cosmosofflinewithLCC.Data
             var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
                 throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
 
+            // The 'partitionKey' string's format, including any colons (e.g., "userId:Type"),
+            // is determined by the implementation of the 'PartitionKey' property getter in the model class T,
+            // using the OIID and Type properties already set on the 'document'.
             string partitionKey = partitionKeyProp.GetValue(document)?.ToString() ??
                 throw new InvalidOperationException("PartitionKey cannot be null");
 
