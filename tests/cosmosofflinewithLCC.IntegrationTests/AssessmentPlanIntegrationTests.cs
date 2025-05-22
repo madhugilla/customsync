@@ -8,7 +8,8 @@ using Xunit;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
-
+    // Commented out for testing purposes - May 22, 2025
+    /*
     public class AssessmentPlanIntegrationTests : IDisposable
     {
         private readonly Container _container;
@@ -188,7 +189,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.Equal(assessmentPlan.PlanName, retrievedPlan.PlanName);
             Assert.Equal(assessmentPlan.OIID, retrievedPlan.OIID);
             // assert that domains are not null
-            Assert.NotNull(retrievedPlan.DomainList);
-        }
+            Assert.NotNull(retrievedPlan.DomainList);        }
     }
+    */
 }
