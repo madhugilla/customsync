@@ -1,11 +1,3 @@
-using Microsoft.Azure.Cosmos;
-using cosmosofflinewithLCC.Data;
-using cosmosofflinewithLCC.Models;
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Xunit;
-
 namespace cosmosofflinewithLCC.IntegrationTests
 {
     // Commented out for testing purposes - May 22, 2025

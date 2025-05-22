@@ -2,8 +2,6 @@ using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Threading.Tasks;
 
 namespace cosmosofflinewithLCC
 {

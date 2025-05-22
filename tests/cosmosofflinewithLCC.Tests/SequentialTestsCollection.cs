@@ -1,5 +1,3 @@
-using Xunit;
-
 namespace cosmosofflinewithLCC.Tests
 {
     [CollectionDefinition("SequentialTests", DisableParallelization = true)]

@@ -3,7 +3,6 @@ using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
