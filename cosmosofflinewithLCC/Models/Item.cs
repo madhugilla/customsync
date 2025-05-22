@@ -15,5 +15,7 @@ namespace cosmosofflinewithLCC.Models
 
         [JsonPropertyName("partitionKey")]
         public string PartitionKey => $"{OIID}:{Type ?? GetType().Name}";
+        [JsonPropertyName("isdeleted")]
+        public bool IsDeleted { get; set; }
     }
 }
