@@ -42,13 +42,9 @@ namespace cosmosofflinewithLCC.Models
 
         [JsonPropertyName("partitionKey")]
 
-        public string PartitionKey => $"{OIID}:AssessmentPlan";
+        public string PartitionKey => $"{OIID}:AssessmentPlan"; [JsonPropertyName("DomainList")]
 
-
-
-        [JsonPropertyName("domainLevels")]
-
-        public DomainLevel[] DomainsList { get; set; }
+        public DomainLevel[] DomainList { get; set; }
 
 
 
