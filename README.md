@@ -29,7 +29,12 @@ graph TD
     
     subgraph Azure Cloud
         RemoteStore[Cosmos DB Store] -- Implements --> IStore
-        RemoteStore --> CosmosDB[(Azure Cosmos DB)]
+        RemoteStore --> OptimizedBulk[Parallel Bulk Operations]
+        RemoteStore --> StreamSerialization[Stream-based Serialization]
+        RemoteStore --> PointReadOpt[Partition Key Optimization]
+        OptimizedBulk --> CosmosDB[(Azure Cosmos DB)]
+        StreamSerialization --> CosmosDB
+        PointReadOpt --> CosmosDB
         CosmosDB -- User-partitioned Data --> UserFilter[User Data Filtering]
     end
     
@@ -46,12 +51,14 @@ graph TD
     classDef component fill:#00BCF2,color:white;
     classDef interface fill:#FFB900,color:black;
     classDef user fill:#107C10,color:white;
+    classDef optimization fill:#FF8C00,color:white;
     
     class RemoteStore,CosmosDB azure;
     class LocalStore,LocalDB,PendingChanges local;
     class SyncEngine,Push,Pull,ConflictResolution component;
     class IStore interface;
     class FirstLaunch,InitialPull,UserFilter user;
+    class OptimizedBulk,StreamSerialization,PointReadOpt optimization;
 ```
 
 #### Architecture Diagram Explanation
@@ -75,6 +82,8 @@ The architecture diagram illustrates the three main components of the solution:
    - The remote Cosmos DB store implements the same `IDocumentStore` interface
    - This design creates a consistent abstraction between local and cloud storage
    - Leverages Cosmos DB's global distribution and high availability features
+   - Optimized with parallel bulk operations, stream serialization and partition key efficiency
+   - Implements advanced error handling and diagnostic logging
    - The consistent interface pattern makes the system extensible to other storage providers
 
 The color-coding in the diagram differentiates between:
@@ -82,6 +91,7 @@ The color-coding in the diagram differentiates between:
 - Local storage components (purple)
 - Synchronization components (light blue)
 - Interface definitions (yellow)
+- Optimization components (orange)
 
 ### Data Flow Diagram
 
@@ -91,44 +101,52 @@ sequenceDiagram
     participant Local as SQLite Store
     participant Sync as Sync Engine
     participant Remote as Cosmos DB Store
+    participant Cosmos as Azure Cosmos DB
     
-    Note over App,Remote: First Launch Detection
+    Note over App,Cosmos: First Launch Detection
     App->>App: Check if SQLite DB exists and has data
     App->>App: Get Current User ID
     
     alt First Launch
-        Note over App,Remote: Initial User Data Pull
+        Note over App,Cosmos: Initial User Data Pull
         App->>Sync: Trigger Initial User Data Pull
         Sync->>Remote: Request User-Specific Data (userId filter)
+        Remote->>Cosmos: Efficient Partition Key Query
+        Cosmos-->>Remote: Return User's Data
         Remote-->>Sync: Return User's Items Only
-        Sync->>Local: Store Initial Data
+        Sync->>Local: Store Initial Data (No Pending Changes)
     end
     
-    Note over App,Remote: Normal Operation (Online or Offline)
+    Note over App,Cosmos: Normal Operation (Online or Offline)
     App->>Local: Read/Write Data
     Local->>Local: Store in SQLite DB
     Local->>Local: Track in Pending Changes
     
-    Note over App,Remote: Regular Synchronization Process
+    Note over App,Cosmos: Regular Synchronization Process
     App->>Sync: Trigger Sync
     Sync->>Local: Get Pending Changes
     Local-->>Sync: Return Changed Items
     
-    Note over Sync: Push Phase
+    Note over Sync,Cosmos: Push Phase
     Sync->>Remote: Push Local Changes (with userId)
-    Remote-->>Sync: Confirm Changes
+    Remote->>Remote: Group by Partition Key
+    Remote->>Cosmos: Parallel Bulk Operations
+    Cosmos-->>Remote: Confirm Changes
+    Remote-->>Sync: Return Results
     Sync->>Local: Clear Pending Changes Flag
     
-    Note over Sync: Pull Phase
+    Note over Sync,Cosmos: Pull Phase
     Sync->>Remote: Get User's Remote Items (userId filter)
-    Remote-->>Sync: Return User's Items Only
+    Remote->>Cosmos: Optimized Query with Partition Key
+    Cosmos-->>Remote: Return User's Data
+    Remote-->>Sync: Return User's Items
     
     loop For Each Remote Item
         Sync->>Sync: Compare LastModified
         Sync->>Local: Update If Remote Is Newer
     end
     
-    Note over App,Remote: Conflict Resolution
+    Note over App,Cosmos: Conflict Resolution
     Sync->>Sync: Time-based Resolution<br/>(Latest Wins)
 ```
 
@@ -142,24 +160,30 @@ The sequence diagram illustrates the temporal flow of data through the system:
    - This ensures seamless operation regardless of network connectivity
    - This design pattern follows the offline-first architectural principle
 
-2. **Synchronization Process**:
+2. **Optimized Cosmos DB Interactions**:
+   - The diagram shows detailed interactions with Azure Cosmos DB
+   - Illustrates partition key optimizations for efficient queries
+   - Demonstrates parallel bulk operations for better throughput
+   - Shows the stream-based serialization approach for data transfer
+
+3. **Synchronization Process**:
    - When triggered (either manually or automatically on network detection):
      - The Sync Engine first retrieves all pending changes from the local store
      - These represent all writes that occurred while offline or since last sync
 
-3. **Push Phase**:
+4. **Push Phase**:
    - Local changes are pushed to Cosmos DB in an optimized batch operation
    - This follows Azure best practices for minimizing API calls and transaction costs
    - After successful push, the pending changes flags are cleared locally
    - Error handling includes retry logic for transient failures
 
-4. **Pull Phase**:
+5. **Pull Phase**:
    - All remote items are retrieved from Cosmos DB
    - For each item, timestamps are compared between local and remote versions
    - The system follows an "eventual consistency" model where the latest change wins
    - This approach balances data integrity with offline functionality
 
-5. **Conflict Resolution Strategy**:
+6. **Conflict Resolution Strategy**:
    - Leverages the "Last-Write-Wins" pattern
    - Each document contains a LastModified timestamp field
    - When conflicts occur:
@@ -253,6 +277,11 @@ Conflict resolution uses the Last-Write-Wins strategy where:
 
 - **SqliteStore**: Uses SQLite for local offline storage with user-specific data filtering capabilities
 - **CosmosDbStore**: Communicates with Azure Cosmos DB
+  - Optimized for performance and reliability
+  - Uses stream-based serialization for precise control over JSON structure
+  - Implements efficient bulk operations with parallel execution
+  - Handles transient errors with improved error reporting
+  - Optimizes point reads with partition key for reduced RU consumption
 
 ### Models
 
@@ -299,6 +328,39 @@ Run the integration tests (requires the Cosmos DB Emulator to be running):
 ```
 dotnet test tests/cosmosofflinewithLCC.IntegrationTests
 ```
+
+## Performance Optimizations
+
+### Cosmos DB Optimizations
+
+The CosmosDbStore has been optimized for better performance, reliability, and cost efficiency:
+
+1. **Improved Bulk Operations**:
+   - The `UpsertBulkAsync` method uses parallel execution to maximize throughput
+   - All operations are batched and executed concurrently with proper error handling
+   - This approach balances reliability with performance, especially for larger datasets
+
+2. **Efficient Serialization**:
+   - Uses `System.Text.Json` with custom serialization options for performance
+   - Stream-based operations for precise control over JSON formatting and structure
+   - Proper handling of computed properties like `PartitionKey`
+
+3. **Point Reads Optimization**:
+   - All read operations utilize partition key information for efficient retrieval
+   - This significantly reduces Request Unit (RU) consumption in Cosmos DB
+   - Particularly beneficial for large collections
+
+4. **Query Optimization**:
+   - `GetItemsByIdsAsync` uses optimized IN queries for batch retrieval
+   - Filters are applied at the database level rather than in application code
+   - Query parameters are properly used to prevent injection vulnerabilities
+
+5. **Robust Error Handling**:
+   - Comprehensive exception handling with detailed error information
+   - Graceful fallback to reliable operations when batches fail
+   - Proper diagnostic logging to facilitate troubleshooting
+
+These optimizations ensure the system operates efficiently at scale while minimizing Azure Cosmos DB costs.
 
 ## Limitations
 
