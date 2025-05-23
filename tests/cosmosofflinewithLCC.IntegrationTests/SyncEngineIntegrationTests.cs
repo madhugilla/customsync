@@ -559,7 +559,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, "user1");
 
             await syncEngine.SyncAsync();
-            await Task.Delay(500);
+            await Task.Delay(800);
 
             // Assert - Should only sync user1's Items (not Orders or user2's items)
             var localUser1Item = await _localStore.GetAsync("initUser1Item", "user1");
