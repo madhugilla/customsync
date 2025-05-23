@@ -34,24 +34,17 @@ namespace cosmosofflinewithLCC
                         ConnectionMode = ConnectionMode.Gateway,
                         SerializerOptions = new CosmosSerializationOptions
                         {
-                            PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+                            PropertyNamingPolicy = CosmosPropertyNamingPolicy.Default
                         }
                     }));
 
-                    // Register shared container for all document types using composite partition key
-                    services.AddSingleton(async provider =>
+                    // Register shared container for all document types - direct access to existing resources
+                    services.AddSingleton(provider =>
                     {
                         var client = provider.GetRequiredService<CosmosClient>();
-                        var db = await client.CreateDatabaseIfNotExistsAsync(databaseId);
 
-                        // Use a composite partition key (userId:docType) for multi-tenant and multi-type support
-                        var container = await db.Database.CreateContainerIfNotExistsAsync(
-                            id: containerId,
-                            partitionKeyPath: "/partitionKey",
-                            throughput: 400
-                        );
-
-                        return container.Container;
+                        // Direct access to existing container (created by IAC)
+                        return client.GetDatabase(databaseId).GetContainer(containerId);
                     });
 
                     // Register stores for Item type
@@ -62,7 +55,7 @@ namespace cosmosofflinewithLCC
                     });
                     services.AddSingleton<CosmosDbStore<Item>>(provider =>
                     {
-                        var container = provider.GetRequiredService<Task<Container>>().GetAwaiter().GetResult();
+                        var container = provider.GetRequiredService<Container>();
                         return new CosmosDbStore<Item>(container);
                     });
 
@@ -74,7 +67,7 @@ namespace cosmosofflinewithLCC
                     });
                     services.AddSingleton<CosmosDbStore<Order>>(provider =>
                     {
-                        var container = provider.GetRequiredService<Task<Container>>().GetAwaiter().GetResult();
+                        var container = provider.GetRequiredService<Container>();
                         return new CosmosDbStore<Order>(container);
                     });
 
@@ -117,8 +110,6 @@ namespace cosmosofflinewithLCC
             var itemService = serviceScope.ServiceProvider.GetRequiredService<ItemService>();
             var syncEngineOrder = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Order>>();
             var logger = serviceScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            // var localStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Item>>(); // Now in ItemService
-            // var remoteStore = serviceScope.ServiceProvider.GetRequiredService<CosmosDbStore<Item>>(); // Now in ItemService
 
             // Set the current user ID - in a real app this would come from authentication
             string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
@@ -129,16 +120,41 @@ namespace cosmosofflinewithLCC
 
             if (isFirstLaunch)
             {
-                logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
-
-                // Perform initial pull for Item type using ItemService
-                await itemService.InitialDataPullAsync();
-                // Perform initial pull for Order type
-                await syncEngineOrder.InitialUserDataPullAsync("Order");
-
-                logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
+                await InitialDataPullAsync(itemService, syncEngineOrder, logger, currentUserId);
             }
 
+            // Demonstrate Item operations
+            await DemonstrateItemOperations(itemService, logger);
+
+            // Demonstrate Order operations
+            await DemonstrateOrderOperations(serviceScope, syncEngineOrder, logger, currentUserId);
+        }
+
+        /// <summary>
+        /// Performs initial data pull for Items and Orders
+        /// </summary>
+        private static async Task InitialDataPullAsync(
+            ItemService itemService,
+            SyncEngine<Order> syncEngineOrder,
+            ILogger logger,
+            string currentUserId)
+        {
+            logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
+
+            // Perform initial pull for Item type using ItemService
+            await itemService.InitialDataPullAsync();
+
+            // Perform initial pull for Order type
+            await syncEngineOrder.InitialUserDataPullAsync("Order");
+
+            logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
+        }
+
+        /// <summary>
+        /// Demonstrates Item operations including local changes, remote changes, and sync
+        /// </summary>
+        private static async Task DemonstrateItemOperations(ItemService itemService, ILogger logger)
+        {
             // Simulate offline change for Item using ItemService
             var item = new Item()
             {
@@ -148,6 +164,7 @@ namespace cosmosofflinewithLCC
                 // OIID and Type will be set by ItemService
             };
             await itemService.AddOrUpdateLocalItemAsync(item);
+            logger.LogInformation("Created local item with ID: {ItemId}", item.ID);
 
             // Simulate remote change (conflict) for Item using ItemService
             var remoteItem = new Item()
@@ -158,17 +175,29 @@ namespace cosmosofflinewithLCC
                 // OIID and Type will be set by ItemService
             };
             await itemService.AddOrUpdateRemoteItemAsync(remoteItem);
+            logger.LogInformation("Created remote item with ID: {ItemId}", remoteItem.ID);
 
             // Sync using ItemService
             await itemService.SyncItemsAsync();
+            logger.LogInformation("Completed item sync");
 
             // Result for Item using ItemService
             var syncedRemote = await itemService.GetRemoteItemAsync("1");
             var syncedLocal = await itemService.GetLocalItemAsync("1");
             Console.WriteLine($"Remote Content: {syncedRemote?.Content}");
             Console.WriteLine($"Local Content: {syncedLocal?.Content}");
+        }
 
-            // Demonstrate using Order type
+        /// <summary>
+        /// Demonstrates Order operations including creation and sync
+        /// </summary>
+        private static async Task DemonstrateOrderOperations(
+            IServiceScope serviceScope,
+            SyncEngine<Order> syncEngineOrder,
+            ILogger logger,
+            string currentUserId)
+        {
+            // Get Order stores
             var orderLocalStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Order>>();
             var orderRemoteStore = serviceScope.ServiceProvider.GetRequiredService<CosmosDbStore<Order>>();
 
@@ -183,9 +212,16 @@ namespace cosmosofflinewithLCC
             };
 
             await orderLocalStore.UpsertAsync(order);
-
-            // Sync Order data using the Order-specific SyncEngine instance
-            await syncEngineOrder.SyncAsync();
+            logger.LogInformation("Created local order with ID: {OrderId}", order.ID);            // Sync Order data using the Order-specific SyncEngine instance
+            try
+            {
+                await syncEngineOrder.SyncAsync();
+                logger.LogInformation("Order sync completed successfully");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("Order sync encountered an issue: {Message}", ex.Message);
+            }
 
             // Verify the order was synced
             var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
