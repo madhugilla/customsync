@@ -191,7 +191,12 @@ namespace cosmosofflinewithLCC.Data
             using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
             await _container.UpsertItemStreamAsync(
                 streamPayload: stream,
-                partitionKey: new PartitionKey(partitionKey)
+                partitionKey: new PartitionKey(partitionKey),
+                requestOptions: new ItemRequestOptions
+                {
+                    EnableContentResponseOnWrite = false,
+
+                }
             );
         }
         public Task UpsertBulkAsync(IEnumerable<T> documents)
@@ -200,27 +205,28 @@ namespace cosmosofflinewithLCC.Data
         }
         public async Task UpsertBulkAsync(IEnumerable<T> documents, bool markAsPending)
         {
-            // Since batch operations are having issues, let's use individual upsert operations
-            // This is less efficient but more reliable until we can fix the batch operation
-            var tasks = new List<Task>();
+            var docsList = documents.ToList();
+            if (docsList.Count == 0) return;
 
-            foreach (var document in documents)
+            try
             {
-                // We can use the existing UpsertAsync method which is working correctly
-                tasks.Add(UpsertAsync(document, markAsPending));
-
-                // To avoid overwhelming the service, limit concurrent operations
-                if (tasks.Count >= 100)
+                // Fall back to individual upserts for reliability
+                var tasks = new List<Task>();
+                foreach (var doc in docsList)
                 {
-                    await Task.WhenAll(tasks);
-                    tasks.Clear();
+                    tasks.Add(UpsertAsync(doc, markAsPending));
                 }
-            }
 
-            // Wait for any remaining operations to complete
-            if (tasks.Count > 0)
-            {
                 await Task.WhenAll(tasks);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in UpsertBulkAsync: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine($"Inner exception: {ex.InnerException.Message}");
+                }
+                throw;
             }
         }
 

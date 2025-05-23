@@ -34,7 +34,7 @@ namespace cosmosofflinewithLCC
                         ConnectionMode = ConnectionMode.Gateway,
                         SerializerOptions = new CosmosSerializationOptions
                         {
-                            PropertyNamingPolicy = CosmosPropertyNamingPolicy.Default
+                            PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase,
                         }
                     }));
 
