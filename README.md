@@ -4,7 +4,12 @@ This project demonstrates an offline-first synchronization solution between Azur
 
 ## Overview
 
-The solution provides a bidirectional sync mechanism allowing applications to work offline with a local SQLite database and synchronize with Azure Cosmos DB when connectivity is available. It uses last-modified timestamps to manage conflict resolution.
+The solution provides a bidirectional sync mechanism allowing applications to work offline with a local SQLite database and synchronize with Azure Cosmos DB when connectiv3. **Batch Preparation**:
+   - Document IDs are collected in a batch for efficient retrieval
+   - The system ensures all documents have proper:
+     - User ID properties
+     - Type properties
+     - Timestamp information available. It uses last-modified timestamps to manage conflict resolution.
 
 ### Architecture Diagram
 
@@ -29,12 +34,7 @@ graph TD
     
     subgraph Azure Cloud
         RemoteStore[Cosmos DB Store] -- Implements --> IStore
-        RemoteStore --> OptimizedBulk[Parallel Bulk Operations]
-        RemoteStore --> StreamSerialization[Stream-based Serialization]
-        RemoteStore --> PointReadOpt[Partition Key Optimization]
-        OptimizedBulk --> CosmosDB[(Azure Cosmos DB)]
-        StreamSerialization --> CosmosDB
-        PointReadOpt --> CosmosDB
+        RemoteStore --> CosmosDB[(Azure Cosmos DB)]
         CosmosDB -- User-partitioned Data --> UserFilter[User Data Filtering]
     end
     
@@ -51,14 +51,12 @@ graph TD
     classDef component fill:#00BCF2,color:white;
     classDef interface fill:#FFB900,color:black;
     classDef user fill:#107C10,color:white;
-    classDef optimization fill:#FF8C00,color:white;
     
     class RemoteStore,CosmosDB azure;
     class LocalStore,LocalDB,PendingChanges local;
     class SyncEngine,Push,Pull,ConflictResolution component;
     class IStore interface;
     class FirstLaunch,InitialPull,UserFilter user;
-    class OptimizedBulk,StreamSerialization,PointReadOpt optimization;
 ```
 
 #### Architecture Diagram Explanation
@@ -82,8 +80,6 @@ The architecture diagram illustrates the three main components of the solution:
    - The remote Cosmos DB store implements the same `IDocumentStore` interface
    - This design creates a consistent abstraction between local and cloud storage
    - Leverages Cosmos DB's global distribution and high availability features
-   - Optimized with parallel bulk operations, stream serialization and partition key efficiency
-   - Implements advanced error handling and diagnostic logging
    - The consistent interface pattern makes the system extensible to other storage providers
 
 The color-coding in the diagram differentiates between:
@@ -91,7 +87,6 @@ The color-coding in the diagram differentiates between:
 - Local storage components (purple)
 - Synchronization components (light blue)
 - Interface definitions (yellow)
-- Optimization components (orange)
 
 ### Data Flow Diagram
 
@@ -101,52 +96,44 @@ sequenceDiagram
     participant Local as SQLite Store
     participant Sync as Sync Engine
     participant Remote as Cosmos DB Store
-    participant Cosmos as Azure Cosmos DB
     
-    Note over App,Cosmos: First Launch Detection
+    Note over App,Remote: First Launch Detection
     App->>App: Check if SQLite DB exists and has data
     App->>App: Get Current User ID
     
     alt First Launch
-        Note over App,Cosmos: Initial User Data Pull
+        Note over App,Remote: Initial User Data Pull
         App->>Sync: Trigger Initial User Data Pull
         Sync->>Remote: Request User-Specific Data (userId filter)
-        Remote->>Cosmos: Efficient Partition Key Query
-        Cosmos-->>Remote: Return User's Data
         Remote-->>Sync: Return User's Items Only
-        Sync->>Local: Store Initial Data (No Pending Changes)
+        Sync->>Local: Store Initial Data
     end
     
-    Note over App,Cosmos: Normal Operation (Online or Offline)
+    Note over App,Remote: Normal Operation (Online or Offline)
     App->>Local: Read/Write Data
     Local->>Local: Store in SQLite DB
     Local->>Local: Track in Pending Changes
     
-    Note over App,Cosmos: Regular Synchronization Process
+    Note over App,Remote: Regular Synchronization Process
     App->>Sync: Trigger Sync
     Sync->>Local: Get Pending Changes
     Local-->>Sync: Return Changed Items
     
-    Note over Sync,Cosmos: Push Phase
+    Note over Sync: Push Phase
     Sync->>Remote: Push Local Changes (with userId)
-    Remote->>Remote: Group by Partition Key
-    Remote->>Cosmos: Parallel Bulk Operations
-    Cosmos-->>Remote: Confirm Changes
-    Remote-->>Sync: Return Results
+    Remote-->>Sync: Confirm Changes
     Sync->>Local: Clear Pending Changes Flag
     
-    Note over Sync,Cosmos: Pull Phase
+    Note over Sync: Pull Phase
     Sync->>Remote: Get User's Remote Items (userId filter)
-    Remote->>Cosmos: Optimized Query with Partition Key
-    Cosmos-->>Remote: Return User's Data
-    Remote-->>Sync: Return User's Items
+    Remote-->>Sync: Return User's Items Only
     
     loop For Each Remote Item
         Sync->>Sync: Compare LastModified
         Sync->>Local: Update If Remote Is Newer
     end
     
-    Note over App,Cosmos: Conflict Resolution
+    Note over App,Remote: Conflict Resolution
     Sync->>Sync: Time-based Resolution<br/>(Latest Wins)
 ```
 
@@ -160,30 +147,24 @@ The sequence diagram illustrates the temporal flow of data through the system:
    - This ensures seamless operation regardless of network connectivity
    - This design pattern follows the offline-first architectural principle
 
-2. **Optimized Cosmos DB Interactions**:
-   - The diagram shows detailed interactions with Azure Cosmos DB
-   - Illustrates partition key optimizations for efficient queries
-   - Demonstrates parallel bulk operations for better throughput
-   - Shows the stream-based serialization approach for data transfer
-
-3. **Synchronization Process**:
+2. **Synchronization Process**:
    - When triggered (either manually or automatically on network detection):
      - The Sync Engine first retrieves all pending changes from the local store
      - These represent all writes that occurred while offline or since last sync
 
-4. **Push Phase**:
+3. **Push Phase**:
    - Local changes are pushed to Cosmos DB in an optimized batch operation
    - This follows Azure best practices for minimizing API calls and transaction costs
    - After successful push, the pending changes flags are cleared locally
    - Error handling includes retry logic for transient failures
 
-5. **Pull Phase**:
+4. **Pull Phase**:
    - All remote items are retrieved from Cosmos DB
    - For each item, timestamps are compared between local and remote versions
    - The system follows an "eventual consistency" model where the latest change wins
    - This approach balances data integrity with offline functionality
 
-6. **Conflict Resolution Strategy**:
+5. **Conflict Resolution Strategy**:
    - Leverages the "Last-Write-Wins" pattern
    - Each document contains a LastModified timestamp field
    - When conflicts occur:
@@ -277,11 +258,6 @@ Conflict resolution uses the Last-Write-Wins strategy where:
 
 - **SqliteStore**: Uses SQLite for local offline storage with user-specific data filtering capabilities
 - **CosmosDbStore**: Communicates with Azure Cosmos DB
-  - Optimized for performance and reliability
-  - Uses stream-based serialization for precise control over JSON structure
-  - Implements efficient bulk operations with parallel execution
-  - Handles transient errors with improved error reporting
-  - Optimizes point reads with partition key for reduced RU consumption
 
 ### Models
 
@@ -329,39 +305,6 @@ Run the integration tests (requires the Cosmos DB Emulator to be running):
 dotnet test tests/cosmosofflinewithLCC.IntegrationTests
 ```
 
-## Performance Optimizations
-
-### Cosmos DB Optimizations
-
-The CosmosDbStore has been optimized for better performance, reliability, and cost efficiency:
-
-1. **Improved Bulk Operations**:
-   - The `UpsertBulkAsync` method uses parallel execution to maximize throughput
-   - All operations are batched and executed concurrently with proper error handling
-   - This approach balances reliability with performance, especially for larger datasets
-
-2. **Efficient Serialization**:
-   - Uses `System.Text.Json` with custom serialization options for performance
-   - Stream-based operations for precise control over JSON formatting and structure
-   - Proper handling of computed properties like `PartitionKey`
-
-3. **Point Reads Optimization**:
-   - All read operations utilize partition key information for efficient retrieval
-   - This significantly reduces Request Unit (RU) consumption in Cosmos DB
-   - Particularly beneficial for large collections
-
-4. **Query Optimization**:
-   - `GetItemsByIdsAsync` uses optimized IN queries for batch retrieval
-   - Filters are applied at the database level rather than in application code
-   - Query parameters are properly used to prevent injection vulnerabilities
-
-5. **Robust Error Handling**:
-   - Comprehensive exception handling with detailed error information
-   - Graceful fallback to reliable operations when batches fail
-   - Proper diagnostic logging to facilitate troubleshooting
-
-These optimizations ensure the system operates efficiently at scale while minimizing Azure Cosmos DB costs.
-
 ## Limitations
 
 - Soft deletes not yet implemented (see TODO in SyncEngine)
@@ -407,22 +350,204 @@ This approach is particularly beneficial for:
 - Multi-tenant systems where users should only access their own data
 - Applications that need to optimize initial startup time
 
+## Synchronization Process in Detail
+
+This section provides an in-depth explanation of how the synchronization process works, which is valuable for new developers joining the project.
+
+### Local Database Structure
+
+To understand the sync process, it's important to know how the local database is structured:
+
+1. **Main Data Tables**:
+   - For each model type (e.g., `Items`, `Orders`, `AssessmentPlans`), a corresponding SQLite table is created
+   - These tables store the actual document data in a serialized JSON format
+   - Each record includes metadata like timestamps and user IDs
+
+2. **Pending Changes Tracking**:
+   - Each model type has a corresponding `PendingChanges_{ModelName}` table
+   - These tables track the IDs of items that have been modified locally but not yet synced to Cosmos DB
+   - No actual document data is stored in these tables—only references
+
+3. **Schema Design**:
+   - Each main data table contains:
+     - `ID`: Unique identifier for the document
+     - `Content`: JSON-serialized document
+     - `LastModified`: Timestamp used for conflict resolution
+     - `OIID`: User ID for data partitioning
+
+### Before Synchronization
+
+Before the sync process begins:
+
+1. **Local Changes Tracking**:
+   - When a user creates, updates, or modifies data locally:
+     - The document is stored/updated in the main table (e.g., `Items`)
+     - An entry is added to the `PendingChanges_{ModelName}` table
+     - The `LastModified` timestamp is updated to the current time
+
+2. **Data Access Pattern**:
+   - All application operations work against the local database
+   - This enables offline functionality even when no connection to Azure is available
+   - Users can continue working without interruption
+
+3. **State Management**:
+   - Documents maintain their state with:
+     - Updated timestamps indicating when changes occurred
+     - User ID properties to maintain data partitioning
+     - Document type metadata for proper categorization
+
+### During Synchronization
+
+The sync process executes in two distinct phases:
+
+#### Phase 1: Push Phase (Local to Remote)
+
+1. **Pending Changes Collection**:
+   - The system queries the local SQLite database for all items in the `PendingChanges_{ModelName}` tables
+   - It loads the corresponding full documents from the main data tables
+   - This creates a complete set of local changes that need to be pushed to the cloud
+
+2. **Batch Preparation**:
+   - Document IDs are collected in a batch for efficient retrieval 
+   - The system ensures all documents have proper:
+     - User ID properties
+     - Type properties
+     - Timestamp information
+
+3. **Remote Validation**:
+   - For optimization, all relevant remote items are retrieved in a single batch operation
+   - For each pending local change, the system compares it with its remote version:
+     - If local timestamp > remote timestamp: The local version is pushed
+     - If remote timestamp > local timestamp: The local change is skipped (remote wins)
+     - If the item doesn't exist remotely: It's always pushed
+
+4. **Bulk Updates**:
+   - Documents requiring updates are sent to Cosmos DB in a bulk operation
+   - This minimizes the number of network requests and reduces RU consumption
+   - Each document is sent with proper partition key information
+
+5. **Pending Status Clearing**:
+   - After a successful push, the corresponding IDs are removed from the `PendingChanges_{ModelName}` tables
+   - This happens regardless of whether the item was actually pushed or skipped due to conflict resolution
+
+#### Phase 2: Pull Phase (Remote to Local)
+
+1. **Remote Data Retrieval**:
+   - The system retrieves all documents for the current user from Cosmos DB
+   - This uses a partition key query for efficiency, filtering by the user's ID
+
+2. **Local Comparison**:
+   - For each remote document, the system performs a point lookup in the local database
+   - It then compares timestamps to determine which version is newer
+
+3. **Timestamp-Based Updates**:
+   - If remote timestamp > local timestamp: The local copy is updated with the remote version
+   - If local timestamp > remote timestamp: The local copy is kept unchanged
+   - If the item doesn't exist locally: It's always added from the remote source
+
+4. **Non-Tracked Updates**:
+   - Critically, updates from the remote store are NOT marked as pending changes
+   - This prevents cyclical sync issues where data would constantly ping-pong between stores
+   - The `UpsertBulkAsync` method is called with `trackAsyncChanges` set to `false`
+
+### After Synchronization
+
+Once synchronization completes:
+
+1. **Database State**:
+   - The local SQLite database contains the most up-to-date information based on the Last-Write-Wins strategy
+   - Data is consistent between the local store and the remote Cosmos DB (eventual consistency)
+
+2. **Pending Changes State**:
+   - The `PendingChanges_{ModelName}` tables are cleared of successfully synced items
+   - Any new changes made during the sync process will still be present and marked for the next sync
+
+3. **Performance Metrics**:
+   - The system logs detailed information about the sync operation:
+     - Number of items pushed to remote (successes)
+     - Number of items pulled from remote (updates)
+     - Number of items skipped due to conflicts
+     - Total synchronization duration
+
+4. **Continued Operation**:
+   - The application continues to track changes for the next synchronization cycle
+   - Each write operation to the local database will again be tracked in the pending changes tables
+   - This creates a continuous synchronization loop that maintains eventual consistency
+
+### Special Case: Initial Data Pull
+
+For first-time app launches, a special synchronization flow occurs:
+
+1. **Detection**:
+   - The application checks if the SQLite database exists and has data
+   - If not, it's determined to be a first launch
+
+2. **Initial Pull**:
+   - Only remote data belonging to the current user is pulled down
+   - No local data is pushed up (since there isn't any yet)
+   - All data is marked as non-pending to avoid unnecessary sync operations
+
+3. **Database Initialization**:
+   - This initializes the local database with a starting dataset
+   - Operations are optimized by only transferring relevant user data
+
+### Error Handling and Recovery
+
+The sync process includes comprehensive error handling:
+
+1. **Transaction Safety**:
+   - SQLite operations use transactions to maintain database consistency
+   - If errors occur during sync, changes are rolled back to prevent data corruption
+
+2. **Detailed Logging**:
+   - The system records detailed information about the sync process
+   - This aids in troubleshooting when issues arise
+
+3. **Retry Logic**:
+   - The system is designed to handle transient failures in connectivity
+   - This is particularly important for mobile applications or unreliable network conditions
+
+### User Context Changes
+
+When a user context changes (e.g., different user logs in):
+
+1. **Context Update**:
+   - The sync engine's user context is updated via the `UpdateUserId` method
+   - All subsequent operations use the new user ID for filtering
+
+2. **Data Isolation**:
+   - The sync process automatically filters data using the new user ID
+   - This maintains proper data boundaries between different users
+
+### Item Creation Sync Differences
+
+The system handles user-created vs. engine-created items differently:
+
+#### User-Created vs. Engine-Created Items
+
+| Aspect | User-Created Items | Engine-Created Items |
+|--------|-------------------|---------------------|
+| **Origin** | Created in local app | Created on other devices or directly in Cosmos DB |
+| **Pending Changes** | Marked as pending | NOT marked as pending |
+| **Push Behavior** | Pushed to Cosmos DB | Never pushed back (prevents loops) |
+| **Timestamp** | New timestamp created locally | Original timestamp preserved |
+| **Sync Result** | Appear as remote changes on other devices | Integrated locally with original metadata |
+
+This critical distinction prevents:
+
+- **Sync Loops**: Items bouncing endlessly between local and remote stores
+- **Duplicate Data**: Multiple copies of the same item across stores
+- **Data Corruption**: Inconsistent timestamps causing data loss
+
+When a user creates an item, the system records it for sync. When the engine pulls an item from Cosmos DB, it integrates it without marking it for re-upload, maintaining data integrity across the sync ecosystem.
+
 ### Example Usage
 
-The `Program.cs` file demonstrates the initial data load functionality:
+The typical usage pattern for the synchronization process is:
 
-```csharp
-// Set the current user ID - in a real app this would come from authentication
-string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
+1. **Instance Creation**: Create a `SyncEngine` instance with proper stores and user context
+2. **Initial Population**: If it's the first run, perform `InitialUserDataPullAsync`
+3. **Regular Syncs**: Call `SyncAsync()` periodically to keep data in sync
+4. **Change Tracking**: All local changes are automatically tracked
 
-// Check if this is the first launch by checking if the SQLite DB exists and has any data
-bool isFirstLaunch = !File.Exists(sqlitePath) || await IsLocalDbEmpty(localStore);
-
-if (isFirstLaunch)
-{
-    logger.LogInformation("First application launch detected. Performing initial data pull...");
-    
-    // Perform initial pull from remote to local without pushing any local changes, filtered by user ID
-    await InitialUserDataPull(localStore, remoteStore, logger, currentUserId);
-}
-```
+This usage pattern allows applications to maintain a consistent data state while functioning smoothly in both connected and disconnected scenarios.
