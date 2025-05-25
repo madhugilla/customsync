@@ -57,9 +57,7 @@ namespace cosmosofflinewithLCC
                     {
                         var container = provider.GetRequiredService<Container>();
                         return new CosmosDbStore<Item>(container);
-                    });
-
-                    // Register stores for Order type - using the same container but different partition key
+                    });                    // Register stores for Order type - using the same container but different partition key
                     services.AddSingleton<IDocumentStore<Order>>(provider =>
                     {
                         var sqlite = new SqliteStore<Order>(sqlitePath);
@@ -69,6 +67,18 @@ namespace cosmosofflinewithLCC
                     {
                         var container = provider.GetRequiredService<Container>();
                         return new CosmosDbStore<Order>(container);
+                    });
+
+                    // Register stores for AssessmentPlan type - using the same container but different partition key
+                    services.AddSingleton<IDocumentStore<AssessmentPlan>>(provider =>
+                    {
+                        var sqlite = new SqliteStore<AssessmentPlan>(sqlitePath);
+                        return sqlite;
+                    });
+                    services.AddSingleton<CosmosDbStore<AssessmentPlan>>(provider =>
+                    {
+                        var container = provider.GetRequiredService<Container>();
+                        return new CosmosDbStore<AssessmentPlan>(container);
                     });
 
                     // Register logging
@@ -85,9 +95,7 @@ namespace cosmosofflinewithLCC
                             x => x.ID,
                             x => x.LastModified,
                             currentUserId);
-                    });
-
-                    // Register SyncEngine for Order type
+                    });                    // Register SyncEngine for Order type
                     services.AddScoped<SyncEngine<Order>>(sp =>
                     {
                         var currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
@@ -99,93 +107,54 @@ namespace cosmosofflinewithLCC
                             x => x.LastModified,
                             currentUserId);
                     });
+                    // Register SyncEngine for AssessmentPlan type
+                    services.AddScoped<SyncEngine<AssessmentPlan>>(sp =>
+                    {
+                        var currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
+                        return new SyncEngine<AssessmentPlan>(
+                            sp.GetRequiredService<IDocumentStore<AssessmentPlan>>(),
+                            sp.GetRequiredService<CosmosDbStore<AssessmentPlan>>(),
+                            sp.GetRequiredService<ILogger<SyncEngine<AssessmentPlan>>>(),
+                            x => x.ID,
+                            x => x.LastModified,
+                            currentUserId);
+                    });
 
-                    // Register ItemService
-                    services.AddScoped<ItemService>();
+                    // Register AssessmentPlanService
+                    services.AddScoped<Services.AssessmentPlanService>();
                 })
-                .Build();
-
-            // Get the required services
+                .Build();            // Get the required services
             using var serviceScope = host.Services.CreateScope();
-            var itemService = serviceScope.ServiceProvider.GetRequiredService<ItemService>();
             var syncEngineOrder = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Order>>();
             var logger = serviceScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
             // Set the current user ID - in a real app this would come from authentication
-            string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
-
-            // Check if this is the first launch by checking if the SQLite DB exists and has any data
+            string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";            // Check if this is the first launch by checking if the SQLite DB exists and has any data
             string sqlitePath = "local.db";
-            bool isFirstLaunch = !File.Exists(sqlitePath) || await itemService.IsLocalStoreEmptyAsync();
+            var localStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Order>>();
+            bool isFirstLaunch = !File.Exists(sqlitePath) || await IsLocalDbEmpty<Order>(localStore);
 
             if (isFirstLaunch)
             {
-                await InitialDataPullAsync(itemService, syncEngineOrder, logger, currentUserId);
+                await InitialDataPullAsync(syncEngineOrder, logger, currentUserId);
             }
-
-            // Demonstrate Item operations
-            await DemonstrateItemOperations(itemService, logger);
 
             // Demonstrate Order operations
             await DemonstrateOrderOperations(serviceScope, syncEngineOrder, logger, currentUserId);
-        }
-
-        /// <summary>
-        /// Performs initial data pull for Items and Orders
-        /// </summary>
+        }        /// <summary>
+                 /// Performs initial data pull for Orders
+                 /// </summary>
         private static async Task InitialDataPullAsync(
-            ItemService itemService,
             SyncEngine<Order> syncEngineOrder,
             ILogger logger,
             string currentUserId)
         {
             logger.LogInformation("First application launch detected. Performing initial data pull for user {UserId} from remote store...", currentUserId);
 
-            // Perform initial pull for Item type using ItemService
-            await itemService.InitialDataPullAsync();
-
             // Perform initial pull for Order type
             await syncEngineOrder.InitialUserDataPullAsync("Order");
 
             logger.LogInformation("Initial data pull completed successfully for user {UserId}.", currentUserId);
-        }
-
-        /// <summary>
-        /// Demonstrates Item operations including local changes, remote changes, and sync
-        /// </summary>
-        private static async Task DemonstrateItemOperations(ItemService itemService, ILogger logger)
-        {
-            // Simulate offline change for Item using ItemService
-            var item = new Item()
-            {
-                ID = "1",
-                Content = "Local version",
-                LastModified = DateTime.UtcNow
-                // OIID and Type will be set by ItemService
-            };
-            await itemService.AddOrUpdateLocalItemAsync(item);
-            logger.LogInformation("Created local item with ID: {ItemId}", item.ID);
-
-            // Simulate remote change (conflict) for Item using ItemService
-            var remoteItem = new Item()
-            {
-                ID = "1",
-                Content = "Remote version",
-                LastModified = DateTime.UtcNow.AddMinutes(-10)
-                // OIID and Type will be set by ItemService
-            };
-            await itemService.AddOrUpdateRemoteItemAsync(remoteItem);
-            logger.LogInformation("Created remote item with ID: {ItemId}", remoteItem.ID);
-
-            // Sync using ItemService
-            await itemService.SyncItemsAsync();
-            logger.LogInformation("Completed item sync");
-
-            // Result for Item using ItemService
-            var syncedRemote = await itemService.GetRemoteItemAsync("1");
-            var syncedLocal = await itemService.GetLocalItemAsync("1");
-            Console.WriteLine($"Remote Content: {syncedRemote?.Content}");
-            Console.WriteLine($"Local Content: {syncedLocal?.Content}");
         }
 
         /// <summary>

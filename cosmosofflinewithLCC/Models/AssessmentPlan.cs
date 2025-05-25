@@ -1,7 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace cosmosofflinewithLCC.Models
 {
-    // Commented out for testing purposes - May 22, 2025
-    /*
+  
     public class AssessmentPlan
 
     {
@@ -109,11 +110,6 @@ namespace cosmosofflinewithLCC.Models
 
         }
 
-
-
-
-
-
     }
-    */
+    
 }
