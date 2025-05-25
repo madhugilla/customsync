@@ -1,7 +1,15 @@
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Threading.Tasks;
+using cosmosofflinewithLCC.Data;
+using cosmosofflinewithLCC.Models;
+using Microsoft.Azure.Cosmos;
+using Xunit;
+
 namespace cosmosofflinewithLCC.IntegrationTests
 {
-    // Commented out for testing purposes - May 22, 2025
-    /*
+    // Uncommented for testing - May 25, 2025
     public class AssessmentPlanIntegrationTests : IDisposable
     {
         private readonly Container _container;
@@ -180,8 +188,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.Equal(assessmentPlan.ID, retrievedPlan.ID);
             Assert.Equal(assessmentPlan.PlanName, retrievedPlan.PlanName);
             Assert.Equal(assessmentPlan.OIID, retrievedPlan.OIID);
-            // assert that domains are not null
-            Assert.NotNull(retrievedPlan.DomainList);        }
+            // assert that domains are not null            Assert.NotNull(retrievedPlan.DomainList);        
+        }
     }
-    */
 }
