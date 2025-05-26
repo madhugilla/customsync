@@ -15,12 +15,16 @@ public class Function1
         _logger = logger;
     }
     [Function("GetCosmosToken")]
-    public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequest req)
+    public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequest req)
     {
+        _logger.LogInformation("GetCosmosToken function started");
+
         // Extract userId from query string or request body
         string? userId = req.Query["userId"];
+        userId = "fasdfas"; // For testing purposes, you can hardcode a userId
         if (string.IsNullOrEmpty(userId))
         {
+            _logger.LogError("Request missing required userId parameter");
             return new BadRequestObjectResult("userId is required");
         }
 
@@ -33,21 +37,35 @@ public class Function1
         if (string.IsNullOrEmpty(cosmosEndpoint) || string.IsNullOrEmpty(cosmosKey) ||
             string.IsNullOrEmpty(databaseName) || string.IsNullOrEmpty(containerName))
         {
+            _logger.LogCritical("Missing required Cosmos DB configuration - endpoint: {HasEndpoint}, key: {HasKey}, database: {HasDatabase}, container: {HasContainer}",
+                !string.IsNullOrEmpty(cosmosEndpoint), !string.IsNullOrEmpty(cosmosKey),
+                !string.IsNullOrEmpty(databaseName), !string.IsNullOrEmpty(containerName));
             return new BadRequestObjectResult("Missing required Cosmos DB configuration");
         }
 
-        var client = new CosmosClient(cosmosEndpoint, cosmosKey);
+        try
+        {
+            var client = new CosmosClient(cosmosEndpoint, cosmosKey);
+            //TODO: create the user during Infrastructure setup
+            var user = await client.GetDatabase(databaseName).UpsertUserAsync(userId);
 
-        var user = await client.GetDatabase(databaseName).UpsertUserAsync(userId);
+            var perm = await user.User.UpsertPermissionAsync(
+                new PermissionProperties(
+                    id: "mobile-access",
+                    permissionMode: PermissionMode.All,
+                    container: client.GetContainer(databaseName, containerName),
+                    resourcePartitionKey: null),
+                tokenExpiryInSeconds: 60 * 60);      // 1 h
 
-        var perm = await user.User.UpsertPermissionAsync(
-            new PermissionProperties(
-                id: "mobile-access",
-                permissionMode: PermissionMode.All,
-                container: client.GetContainer(databaseName, containerName),
-                resourcePartitionKey: new PartitionKey(userId)),
-            tokenExpiryInSeconds: 60 * 60);      // 1 h
+            _logger.LogInformation("Successfully generated Cosmos token for user: {UserId}", userId);
 
-        return new OkObjectResult(new PermissionDto { token = perm.Resource.Token });
+            _logger.LogInformation("Successfully generated Cosmos token : {UserId}", perm.Resource.Token);
+            return new OkObjectResult(new PermissionDto { token = perm.Resource.Token });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate Cosmos token for user: {UserId}", userId);
+            return new StatusCodeResult(500);
+        }
     }
 }
