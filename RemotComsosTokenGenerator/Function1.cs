@@ -17,11 +17,8 @@ public class Function1
     [Function("GetCosmosToken")]
     public async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequest req)
     {
-        _logger.LogInformation("GetCosmosToken function started");
-
-        // Extract userId from query string or request body
+        _logger.LogInformation("GetCosmosToken function started");        // Extract userId from query string or request body
         string? userId = req.Query["userId"];
-        userId = "fasdfas"; // For testing purposes, you can hardcode a userId
         if (string.IsNullOrEmpty(userId))
         {
             _logger.LogError("Request missing required userId parameter");
@@ -42,12 +39,35 @@ public class Function1
                 !string.IsNullOrEmpty(databaseName), !string.IsNullOrEmpty(containerName));
             return new BadRequestObjectResult("Missing required Cosmos DB configuration");
         }
-
         try
         {
-            var client = new CosmosClient(cosmosEndpoint, cosmosKey);
-            //TODO: create the user during Infrastructure setup
-            var user = await client.GetDatabase(databaseName).UpsertUserAsync(userId);
+            // Configure Cosmos client options for emulator (bypass SSL validation)
+            var cosmosClientOptions = new CosmosClientOptions()
+            {
+                HttpClientFactory = () =>
+                {
+                    HttpMessageHandler httpMessageHandler = new HttpClientHandler()
+                    {
+                        ServerCertificateCustomValidationCallback = (req, cert, certChain, errors) => true
+                    };
+                    return new HttpClient(httpMessageHandler);
+                },
+                ConnectionMode = ConnectionMode.Gateway
+            };
+
+            var client = new CosmosClient(cosmosEndpoint, cosmosKey, cosmosClientOptions);
+
+            // Ensure the database exists
+            var databaseResponse = await client.CreateDatabaseIfNotExistsAsync(databaseName);
+            var database = databaseResponse.Database;
+            _logger.LogInformation("Database ensured: {DatabaseName}", databaseName);
+
+            // Ensure the container exists with partition key
+            var containerResponse = await database.CreateContainerIfNotExistsAsync(containerName, "/partitionKey");
+            _logger.LogInformation("Container ensured: {ContainerName}", containerName);
+
+            // TODO: create the user during Infrastructure setup
+            var user = await database.UpsertUserAsync(userId);
 
             var perm = await user.User.UpsertPermissionAsync(
                 new PermissionProperties(
@@ -58,14 +78,26 @@ public class Function1
                 tokenExpiryInSeconds: 60 * 60);      // 1 h
 
             _logger.LogInformation("Successfully generated Cosmos token for user: {UserId}", userId);
-
-            _logger.LogInformation("Successfully generated Cosmos token : {UserId}", perm.Resource.Token);
+            _logger.LogInformation("Successfully generated Cosmos token : {Token}", perm.Resource.Token);
             return new OkObjectResult(new PermissionDto { token = perm.Resource.Token });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to generate Cosmos token for user: {UserId}", userId);
-            return new StatusCodeResult(500);
+            _logger.LogError(ex, "Failed to generate Cosmos token for user: {UserId}. Error: {ErrorMessage}", userId, ex.Message);
+
+            // Return more specific error information for debugging
+            var errorResponse = new
+            {
+                error = "Failed to generate Cosmos token",
+                message = ex.Message,
+                type = ex.GetType().Name,
+                userId = userId,
+                cosmosEndpoint = cosmosEndpoint,
+                databaseName = databaseName,
+                containerName = containerName
+            };
+
+            return new ObjectResult(errorResponse) { StatusCode = 500 };
         }
     }
 }

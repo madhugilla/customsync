@@ -1,38 +1,57 @@
 using Microsoft.Azure.Cosmos;
 using cosmosofflinewithLCC.Data;
+using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
     /// <summary>
     /// Test implementation of ICosmosClientFactory for integration tests
-    /// Wraps an existing Container instance to work with the factory pattern
+    /// Uses HTTP token provider to call the Azure Function for tokens
     /// </summary>
     public class TestCosmosClientFactory : ICosmosClientFactory
     {
-        private readonly Container _container;
+        private readonly ICosmosClientFactory _innerFactory;
 
-        public TestCosmosClientFactory(Container container)
+        public TestCosmosClientFactory(string azureFunctionEndpoint, string userId, string cosmosEndpoint)
         {
-            _container = container ?? throw new ArgumentNullException(nameof(container));
+            if (string.IsNullOrEmpty(azureFunctionEndpoint))
+                throw new ArgumentNullException(nameof(azureFunctionEndpoint));
+            if (string.IsNullOrEmpty(userId))
+                throw new ArgumentNullException(nameof(userId));
+            if (string.IsNullOrEmpty(cosmosEndpoint))
+                throw new ArgumentNullException(nameof(cosmosEndpoint));
+
+            // Create HTTP client for token requests
+            var httpClient = new HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+
+            // Create HTTP token provider that calls the Azure Function
+            var tokenProvider = new HttpTokenProvider(
+                httpClient,
+                azureFunctionEndpoint,
+                userId,
+                logger: null); // Could add logger if needed
+
+            // Create the actual factory with token provider
+            _innerFactory = new CosmosClientFactory(tokenProvider, cosmosEndpoint);
         }
 
         /// <summary>
-        /// Returns the CosmosClient from the existing container
+        /// Creates a CosmosClient using a fresh token from the Azure Function
         /// </summary>
-        public Task<CosmosClient> CreateClientAsync()
+        public async Task<CosmosClient> CreateClientAsync()
         {
-            // Get the client from the container's database
-            var client = _container.Database.Client;
-            return Task.FromResult(client);
+            return await _innerFactory.CreateClientAsync();
         }
 
         /// <summary>
-        /// Returns the test container instance
-        /// Ignores the databaseId and containerId parameters for testing
+        /// Gets a container using a fresh token from the Azure Function
         /// </summary>
-        public Task<Container> GetContainerAsync(string databaseId, string containerId)
+        public async Task<Container> GetContainerAsync(string databaseId, string containerId)
         {
-            return Task.FromResult(_container);
+            return await _innerFactory.GetContainerAsync(databaseId, containerId);
         }
     }
 }

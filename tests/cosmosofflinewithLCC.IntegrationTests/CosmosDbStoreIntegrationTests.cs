@@ -7,58 +7,34 @@ namespace cosmosofflinewithLCC.IntegrationTests
     [Collection("SequentialTests")]
     public class CosmosDbStoreIntegrationTests : IDisposable
     {
-        private readonly Container _container;
         private readonly CosmosDbStore<Item> _store;
-        private readonly CosmosClient _cosmosClient;
-        private readonly ICosmosClientFactory _clientFactory;
+        private readonly TestCosmosClientFactory _clientFactory;
         private readonly string _testUserId = "testUser1";
-        private readonly string _databaseId = "TestDb";
-        private readonly string _containerId = "TestContainer";
+        private readonly string _databaseId = "SyncTestDB"; // Match Azure Function configuration
+        private readonly string _containerId = "SyncTestContainer"; // Match Azure Function configuration
+        private readonly string _azureFunctionUrl = "http://localhost:7071/api/GetCosmosToken";
+        private readonly string _cosmosEndpoint = "https://localhost:8081"; // Cosmos DB emulator endpoint
 
         public CosmosDbStoreIntegrationTests()
         {
-            // Setup using local emulator
-            _cosmosClient = new CosmosClient("AccountEndpoint=https://localhost:8081/;AccountKey=C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==");
+            Console.WriteLine("Setting up CosmosDbStore integration tests with HTTP token provider...");
 
             try
             {
-                // Delete test container if it exists to ensure clean state with correct partition key
-                try
-                {
-                    Console.WriteLine($"Deleting container {_containerId} in database {_databaseId} if it exists");
-                    _cosmosClient.GetDatabase(_databaseId).GetContainer(_containerId).DeleteContainerAsync().GetAwaiter().GetResult();
-                    // Wait a moment for the delete to complete
-                    System.Threading.Thread.Sleep(1000);
-                }
-                catch (Exception ex)
-                {
-                    // Ignore if the container doesn't exist
-                    Console.WriteLine($"Container deletion exception (can be ignored if not exists): {ex.Message}");
-                }
+                // Create the HTTP token-based client factory
+                _clientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
 
-                // Create database if not exists
-                _cosmosClient.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
-                var database = _cosmosClient.GetDatabase(_databaseId);
-
-                Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");
-
-                // Create container with composite partition key (userId:docType)
-                database.CreateContainerIfNotExistsAsync(
-                    id: _containerId,
-                    partitionKeyPath: "/partitionKey",
-                    throughput: 400).GetAwaiter().GetResult();
-
-                _container = database.GetContainer(_containerId);
-
-                // Create test factory and store using factory pattern
-                _clientFactory = new TestCosmosClientFactory(_container);
+                // Create the store using the token-based factory
                 _store = new CosmosDbStore<Item>(_clientFactory, _databaseId, _containerId);
 
-                Console.WriteLine("CosmosDB test container is ready");
+                Console.WriteLine("HTTP token-based CosmosDB store is ready");
+                Console.WriteLine($"Using Azure Function: {_azureFunctionUrl}");
+                Console.WriteLine($"Using Cosmos endpoint: {_cosmosEndpoint}");
+                Console.WriteLine($"Target database: {_databaseId}, container: {_containerId}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error setting up Cosmos DB: {ex.Message}");
+                Console.WriteLine($"Error setting up HTTP token-based Cosmos DB: {ex.Message}");
                 throw;
             }
 
@@ -66,16 +42,18 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Console.WriteLine("Cleaning up any existing test data");
             CleanupTestData().GetAwaiter().GetResult();
         }
-
         private async Task CleanupTestData()
         {
             try
             {
+                // Get a container instance through the client factory
+                var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+
                 // Use a query to find all items (regardless of partition key)
                 var query = new QueryDefinition("SELECT c.id, c.partitionKey FROM c");
                 var itemsToDelete = new List<(string id, string partitionKey)>();
 
-                using var iterator = _container.GetItemQueryIterator<dynamic>(query);
+                using var iterator = container.GetItemQueryIterator<dynamic>(query);
                 while (iterator.HasMoreResults)
                 {
                     var response = await iterator.ReadNextAsync();
@@ -108,9 +86,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 {
                     try
                     {
-                        // Delete using the composite partition key
+                        // Get a fresh container for each delete operation (fresh token)
+                        var deleteContainer = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
                         Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
-                        await _container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
+                        await deleteContainer.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
                     }
                     catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
@@ -122,6 +101,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             catch (Exception ex)
             {
                 Console.WriteLine($"Error cleaning up test data: {ex.Message}");
+                // Don't fail the test setup if cleanup fails
             }
         }
 
@@ -352,11 +332,11 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.Equal(item.Content, result.Content);
             Assert.Equal(item.OIID, result.OIID);
         }
-
         [Fact]
         public async Task MultipleDocumentTypes_ShouldBeStoredInSameContainer()
-        {            // Arrange - create an Order class in the same container
-            var orderClientFactory = new TestCosmosClientFactory(_container);
+        {
+            // Arrange - create an Order class in the same container
+            var orderClientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
             var orderStore = new CosmosDbStore<Order>(orderClientFactory, _databaseId, _containerId);
 
             var item = new Item
