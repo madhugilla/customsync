@@ -3,11 +3,12 @@ using System.Text.Json;
 using System.Reflection;
 
 namespace cosmosofflinewithLCC.Data
-{
-    // Cosmos DB-based remote store (generic)
+{    // Cosmos DB-based remote store (generic) with token-based authentication
     public class CosmosDbStore<T> : IDocumentStore<T> where T : class, new()
     {
-        private readonly Container _container;
+        private readonly ICosmosClientFactory _clientFactory;
+        private readonly string _databaseId;
+        private readonly string _containerId;
         private readonly PropertyInfo _idProp;
         private readonly PropertyInfo _userIdProp;
         private readonly PropertyInfo _typeProp;
@@ -18,16 +19,20 @@ namespace cosmosofflinewithLCC.Data
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
-        public CosmosDbStore(Container container)
+        public CosmosDbStore(ICosmosClientFactory clientFactory, string databaseId, string containerId)
         {
-            _container = container; _idProp = typeof(T).GetProperty("ID") ?? throw new System.Exception("Model must have ID property");
+            _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+            _databaseId = databaseId ?? throw new ArgumentNullException(nameof(databaseId));
+            _containerId = containerId ?? throw new ArgumentNullException(nameof(containerId));
+
+            _idProp = typeof(T).GetProperty("ID") ?? throw new System.Exception("Model must have ID property");
             _userIdProp = typeof(T).GetProperty("OIID") ?? throw new System.Exception("Model must have OIID property for partitioning");
             _typeProp = typeof(T).GetProperty("Type") ?? throw new System.Exception("Model must have Type property for partitioning");
         }
-
         public async Task<List<T>> GetAllAsync()
         {
-            var query = _container.GetItemQueryIterator<T>();
+            var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+            var query = container.GetItemQueryIterator<T>();
             var results = new List<T>();
 
             while (query.HasMoreResults)
@@ -38,11 +43,12 @@ namespace cosmosofflinewithLCC.Data
 
             return results;
         }
-
         public async Task<T?> GetAsync(string id, string userId)
         {
             try
             {
+                var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+
                 // Create instance with userId and type to generate partition key
                 var instance = new T();
                 _userIdProp.SetValue(instance, userId);
@@ -57,7 +63,7 @@ namespace cosmosofflinewithLCC.Data
                 string partitionKey = partitionKeyProp.GetValue(instance)?.ToString() ??
                     throw new InvalidOperationException("PartitionKey cannot be null or empty after setting OIID and Type.");
 
-                var result = await _container.ReadItemAsync<T>(
+                var result = await container.ReadItemAsync<T>(
                     id: id,
                     partitionKey: new PartitionKey(partitionKey)
                 );
@@ -68,9 +74,9 @@ namespace cosmosofflinewithLCC.Data
                 return null;
             }
         }
-
         public async Task<List<T>> GetByUserIdAsync(string userId)
         {
+            var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
             var results = new List<T>();
 
             // Create instance with userId and type to generate partition key
@@ -89,7 +95,7 @@ namespace cosmosofflinewithLCC.Data
 
             // Using QueryRequestOptions with PartitionKey - This instructs Cosmos DB to query only within the specified partition
             // This is equivalent to "SELECT * FROM c" restricted to the given partition
-            var query = _container.GetItemQueryIterator<T>(
+            var query = container.GetItemQueryIterator<T>(
                 requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(partitionKey) }
             );
 
@@ -139,15 +145,14 @@ namespace cosmosofflinewithLCC.Data
             var queryText = $"SELECT * FROM c WHERE c.partitionKey = @partitionKey AND c.id IN ({string.Join(", ", parameterNames)})";
 
             var queryDefinition = new QueryDefinition(queryText)
-                .WithParameter("@partitionKey", partitionKey);
-
-            // Add all IDs as parameters
+                .WithParameter("@partitionKey", partitionKey);            // Add all IDs as parameters
             for (int i = 0; i < idsList.Count; i++)
             {
                 queryDefinition = queryDefinition.WithParameter($"@id{i}", idsList[i]);
             }
 
-            var query = _container.GetItemQueryIterator<T>(queryDefinition);
+            var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+            var query = container.GetItemQueryIterator<T>(queryDefinition);
 
             while (query.HasMoreResults)
             {
@@ -182,14 +187,13 @@ namespace cosmosofflinewithLCC.Data
             // is determined by the implementation of the 'PartitionKey' property getter in the model class T,
             // using the OIID and Type properties already set on the 'document'.
             string partitionKey = partitionKeyProp.GetValue(document)?.ToString() ??
-                throw new InvalidOperationException("PartitionKey cannot be null");
-
-            // Serialize document directly without modifying it
+                throw new InvalidOperationException("PartitionKey cannot be null");            // Serialize document directly without modifying it
             string json = JsonSerializer.Serialize(document, _jsonOptions);
 
             // Use stream overload to preserve exact JSON structure
             using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
-            await _container.UpsertItemStreamAsync(
+            var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+            await container.UpsertItemStreamAsync(
                 streamPayload: stream,
                 partitionKey: new PartitionKey(partitionKey),
                 requestOptions: new ItemRequestOptions

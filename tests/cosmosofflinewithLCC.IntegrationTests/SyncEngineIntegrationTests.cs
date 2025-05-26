@@ -74,7 +74,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Setup SQLite and stores
             _localStore = new SqliteStore<Item>(_dbPath);
-            _remoteStore = new CosmosDbStore<Item>(_container);
+            var clientFactory = new TestCosmosClientFactory(_container);
+            _remoteStore = new CosmosDbStore<Item>(clientFactory, _databaseId, _containerId);
 
             // Setup logger
             _logger = new LoggerFactory().CreateLogger<SyncEngineIntegrationTests>();
@@ -586,14 +587,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
         [Fact]
         public async Task SyncEngine_ShouldSyncDifferentDocumentTypes_WithCompositePartitionKey()
-        {
-            // Arrange - setup stores for both Item and Order
+        {            // Arrange - setup stores for both Item and Order
             var sqlitePath = Path.Combine(Path.GetTempPath(), $"doctype_sync_test_{Guid.NewGuid()}.sqlite");
             var localItemStore = new SqliteStore<Item>(sqlitePath);
-            var remoteItemStore = new CosmosDbStore<Item>(_container);
+            var clientFactory = new TestCosmosClientFactory(_container);
+            var remoteItemStore = new CosmosDbStore<Item>(clientFactory, _databaseId, _containerId);
 
             var localOrderStore = new SqliteStore<Order>(sqlitePath);
-            var remoteOrderStore = new CosmosDbStore<Order>(_container);
+            var remoteOrderStore = new CosmosDbStore<Order>(clientFactory, _databaseId, _containerId);
 
             // Create an Item and an Order
             var item = new Item

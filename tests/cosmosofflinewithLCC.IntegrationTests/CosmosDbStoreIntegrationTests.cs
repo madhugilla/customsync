@@ -10,6 +10,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         private readonly Container _container;
         private readonly CosmosDbStore<Item> _store;
         private readonly CosmosClient _cosmosClient;
+        private readonly ICosmosClientFactory _clientFactory;
         private readonly string _testUserId = "testUser1";
         private readonly string _databaseId = "TestDb";
         private readonly string _containerId = "TestContainer";
@@ -37,7 +38,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
                 // Create database if not exists
                 _cosmosClient.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
-                var database = _cosmosClient.GetDatabase(_databaseId); Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");
+                var database = _cosmosClient.GetDatabase(_databaseId);
+
+                Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");
 
                 // Create container with composite partition key (userId:docType)
                 database.CreateContainerIfNotExistsAsync(
@@ -46,7 +49,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
                     throughput: 400).GetAwaiter().GetResult();
 
                 _container = database.GetContainer(_containerId);
-                _store = new CosmosDbStore<Item>(_container);
+
+                // Create test factory and store using factory pattern
+                _clientFactory = new TestCosmosClientFactory(_container);
+                _store = new CosmosDbStore<Item>(_clientFactory, _databaseId, _containerId);
 
                 Console.WriteLine("CosmosDB test container is ready");
             }
@@ -349,10 +355,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
         [Fact]
         public async Task MultipleDocumentTypes_ShouldBeStoredInSameContainer()
-        {
-            // Arrange - create an Order class in the same container
-            var container = _container;
-            var orderStore = new CosmosDbStore<Order>(container);
+        {            // Arrange - create an Order class in the same container
+            var orderClientFactory = new TestCosmosClientFactory(_container);
+            var orderStore = new CosmosDbStore<Order>(orderClientFactory, _databaseId, _containerId);
 
             var item = new Item
             {

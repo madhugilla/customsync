@@ -1,15 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.Net;
-using System.Threading.Tasks;
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using Microsoft.Azure.Cosmos;
-using Xunit;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
-    // Uncommented for testing - May 25, 2025
     public class AssessmentPlanIntegrationTests : IDisposable
     {
         private readonly Container _container;
@@ -43,16 +37,15 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 // Create database if not exists
                 _cosmosClient.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
                 var database = _cosmosClient.GetDatabase(_databaseId);
-                Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");
-
-                // Create container with composite partition key (userId:docType)
+                Console.WriteLine($"Creating container {_containerId} with partition key path /partitionKey");                // Create container with composite partition key (userId:docType)
                 database.CreateContainerIfNotExistsAsync(
                     id: _containerId,
                     partitionKeyPath: "/partitionKey",
                     throughput: 400).GetAwaiter().GetResult();
 
                 _container = database.GetContainer(_containerId);
-                _store = new CosmosDbStore<AssessmentPlan>(_container);
+                var clientFactory = new TestCosmosClientFactory(_container);
+                _store = new CosmosDbStore<AssessmentPlan>(clientFactory, _databaseId, _containerId);
 
                 Console.WriteLine("CosmosDB test container is ready");
             }
@@ -186,9 +179,9 @@ namespace cosmosofflinewithLCC.IntegrationTests
             // Check the first item
             var retrievedPlan = queryResults[0];
             Assert.Equal(assessmentPlan.ID, retrievedPlan.ID);
-            Assert.Equal(assessmentPlan.PlanName, retrievedPlan.PlanName);
-            Assert.Equal(assessmentPlan.OIID, retrievedPlan.OIID);
-            // assert that domains are not null            Assert.NotNull(retrievedPlan.DomainList);        
+            Assert.Equal(assessmentPlan.PlanName, retrievedPlan.PlanName); Assert.Equal(assessmentPlan.OIID, retrievedPlan.OIID);
+            // assert that domains are not null
+            Assert.NotNull(retrievedPlan.DomainList);
         }
     }
 }
