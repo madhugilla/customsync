@@ -6,28 +6,28 @@
 
 **Deciders:** Development Team, Solution Architect
 
-**Technical Story:** Mobile app needs to synchronize data with Cosmos DB for offline-first functionality. **The app performs only data synchronization operations with no business logic beyond sync functionality.** Decision required on whether to access Cosmos DB directly or through an intermediary API layer.
+**Technical Story:** Mobile app requires robust online/offline data synchronization with Cosmos DB. **The app performs only data synchronization operations with no business logic, schema evolution, or caching requirements.** Decision required on whether to access Cosmos DB directly or through an intermediary API layer for optimal sync performance.
 
 ## Context and Problem Statement
 
-The mobile application requires data synchronization with Azure Cosmos DB to support offline-first functionality. **The app is specifically designed to handle only synchronization operations - no business logic, data validation, or complex processing beyond basic CRUD sync operations.** We need to decide whether the mobile app should connect directly to Cosmos DB or access data through an intermediary API layer. This decision impacts security, performance, maintainability, and scalability of the solution.
+The mobile application requires seamless online/offline data synchronization with Azure Cosmos DB to support offline-first functionality. **The app is specifically designed to handle only synchronization operations - pure data sync with no business logic, schema evolution, caching, or complex processing beyond basic CRUD sync operations.** We need to decide whether the mobile app should connect directly to Cosmos DB or access data through an intermediary API layer. This decision impacts sync performance, security, and maintainability of the solution.
 
 ### Forces
 
-- **Security**: Direct database access from mobile apps exposes connection strings and increases attack surface
-- **Performance**: Direct access eliminates network hops but API layer enables caching and optimization
-- **Offline Capability**: Mobile apps need to work offline and sync when connectivity returns
-- **Development Complexity**: Direct access is simpler initially but API layer provides more flexibility
-- **Data Governance**: API layer enables better control over data access patterns and validation
-- **Sync-Only Focus**: System performs only data synchronization without additional business processing
+- **Security**: Direct database access from mobile apps requires secure credential management
+- **Sync Performance**: Direct access eliminates network hops while API layer may introduce latency
+- **Offline Capability**: Mobile apps need robust offline functionality and seamless sync when connectivity returns
+- **Development Complexity**: Direct access is simpler for sync-only operations vs. API layer overhead
+- **Sync Reliability**: System must handle intermittent connectivity and conflict resolution
+- **Pure Synchronization Focus**: System performs only data synchronization without additional processing
 - **Runtime Security**: Endpoint details and credentials should be obtained at runtime, not embedded in app
 
 ## Decision Drivers
 
 - **Security Requirements**: Minimize exposure of database credentials and implement proper authentication
 - **Offline-First Architecture**: Mobile app must function without network connectivity
-- **Performance**: Minimize latency for data operations while maintaining security
-- **Scalability**: Solution must support multiple mobile clients efficiently
+- **Sync Performance**: Minimize latency for synchronization operations while maintaining security
+- **Sync Reliability**: Solution must handle intermittent connectivity and ensure data consistency
 - **Development Speed**: Quick implementation to validate offline synchronization concepts
 - **Resource Token Implementation**: Leverage Cosmos DB resource tokens for secure, scoped access
 
@@ -52,29 +52,22 @@ The mobile application requires data synchronization with Azure Cosmos DB to sup
 
 **Cons:**
 
-- **Limited Business Logic**: No centralized place for complex business rules (not needed for sync-only system)
-- **Client Complexity**: Mobile app handles all data logic and synchronization
-- **Harder to Evolve**: Schema changes require mobile app updates
-- **Limited Caching**: No server-side caching opportunities
-- **Monitoring Challenges**: More difficult to monitor and log data access patterns
+- **Client Complexity**: Mobile app handles all sync logic and conflict resolution
+- **Distributed Monitoring**: Sync patterns monitored on client-side rather than centralized (addressed by Sentry integration)
 
 ### Option 2: API Layer with Database Access
 
-**Description:** Mobile app connects to a custom Web API that handles all Cosmos DB interactions. API provides RESTful endpoints for data operations and implements business logic server-side. **For a sync-only system, this adds unnecessary complexity.**
+**Description:** Mobile app connects to a custom Web API that handles all Cosmos DB interactions. API provides RESTful endpoints for sync operations and handles synchronization logic server-side. **For a pure sync-only system, this adds unnecessary complexity and latency.**
 
 **Pros:**
 
-- **Centralized Logic**: Business rules and validation in one place (not needed for sync-only operations)
 - **Better Security**: Database credentials never exposed to mobile clients
-- **Easier Evolution**: API versioning allows schema changes without mobile updates
-- **Server-Side Caching**: Can implement caching strategies to improve performance
-- **Better Monitoring**: Centralized logging and analytics for data access
-- **Data Transformation**: Can modify data format without client changes
-- **Rate Limiting**: Built-in protection against abuse
+- **Centralized Sync Logic**: Synchronization rules and conflict resolution in one place
+- **Better Monitoring**: Centralized logging and analytics for sync operations
 
 **Cons:**
 
-- **Increased Latency**: Additional network hop for every operation
+- **Increased Latency**: Additional network hop for every sync operation
 - **More Complexity**: Additional deployment, hosting, and maintenance overhead
 - **Single Point of Failure**: API becomes critical dependency for mobile app
 - **Development Overhead**: More components to build, test, and deploy
@@ -124,11 +117,8 @@ The mobile application requires data synchronization with Azure Cosmos DB to sup
 
 ### Negative Consequences
 
-- **Limited Business Logic Centralization**: Business rules must be implemented in mobile app (not applicable for sync-only system)
-- **Client-Side Complexity**: Mobile app responsible for all data handling logic (appropriate for sync-only operations)
-- **Harder Schema Evolution**: Database schema changes require mobile app updates (vs. Option 2's API versioning)
-- **Monitoring Challenges**: More difficult to implement centralized logging and analytics compared to Option 2's API layer
-- **No Server-Side Caching**: Cannot implement server-side performance optimizations that Option 2's API layer could provide
+- **Client-Side Complexity**: Mobile app responsible for all sync logic and conflict resolution
+- **Distributed Monitoring**: Sync patterns and errors are monitored on individual clients rather than centralized (mitigated by Sentry integration for error tracking and performance monitoring)
 
 ## Implementation Plan
 
@@ -147,6 +137,10 @@ The mobile application requires data synchronization with Azure Cosmos DB to sup
    - Add Last-Write-Wins conflict resolution strategy
    - Implement pending changes tracking
 
+4. **Monitoring Integration** (Week 3)
+   - Configure Sentry for sync error tracking and performance monitoring
+   - Implement sync telemetry for client-side analytics
+
 ### Dependencies
 
 - **Azure Function Deployment**: Token generation service must be deployed first
@@ -160,15 +154,18 @@ The mobile application requires data synchronization with Azure Cosmos DB to sup
 - **Offline Functionality**: App operates fully offline for extended periods
 - **Security Validation**: No master keys or long-lived credentials stored on device
 - **Token Refresh Success**: 99.9% success rate for token generation and refresh
+- **Sync Reliability**: 99.5% success rate for sync operations across network conditions
+- **Conflict Resolution**: Automated conflict resolution without data loss
 
 ## Validation and Review
 
 ### Validation Plan
 
-- **Performance Testing**: Measure sync times with varying data volumes
+- **Performance Testing**: Measure sync times with varying data volumes and network conditions
 - **Security Audit**: Verify no sensitive credentials exposed in mobile app
-- **Offline Testing**: Validate app functionality during extended offline periods
+- **Offline Testing**: Validate app functionality during extended offline periods and intermittent connectivity
 - **Load Testing**: Test token generation under concurrent user load
+- **Sync Conflict Testing**: Validate conflict resolution mechanisms under various scenarios
 
 ### Review Date
 
@@ -179,7 +176,7 @@ The mobile application requires data synchronization with Azure Cosmos DB to sup
 - **Performance Issues**: Sync times exceed acceptable thresholds
 - **Security Concerns**: Any security vulnerabilities identified
 - **Scale Requirements**: Need to support significantly more users
-- **Business Logic Complexity**: Requirements for centralized business rules emerge (unlikely for sync-only system)
+- **Sync Reliability Issues**: Conflict resolution or data consistency problems emerge
 
 ## Links and References
 
@@ -200,12 +197,14 @@ The mobile application requires data synchronization with Azure Cosmos DB to sup
 - **Resource Token Reliability**: Azure Functions provide sufficient reliability for token generation
 - **Network Patterns**: Mobile app has intermittent connectivity requiring robust offline support
 - **Sync-Only Operations**: System performs only data synchronization with no business logic or processing
+- **No Schema Evolution**: Database schema is stable with no expected changes requiring versioning
+- **No Caching Requirements**: Pure sync operations without server-side caching needs
+- **Client-Side Monitoring**: Sentry integration provides adequate error tracking and performance monitoring for distributed sync operations
 
 ### Future Considerations
 
 - **Multi-User Support**: Will require enhanced resource token management
-- **Business Logic Growth**: Complex business rules may necessitate API layer (unlikely for sync-only system)
-- **Monitoring Requirements**: May need to implement custom telemetry solution
+- **Advanced Analytics**: Beyond Sentry monitoring, may need custom telemetry for business intelligence on sync patterns
 - **Compliance Needs**: Regulatory requirements might require API-based audit trails
 
 ## Changelog
