@@ -120,14 +120,6 @@ The mobile application requires seamless online/offline data synchronization wit
 - **Client-Side Complexity**: Mobile app responsible for all sync logic and conflict resolution
 - **Distributed Monitoring**: Sync patterns and errors are monitored on individual clients rather than centralized (mitigated by Sentry integration for error tracking and performance monitoring)
 
-## Links and References
-
-- [ADR-001: Architecture Decision Record Template](./ADR-001-Architecture-Decision-Record.md)
-- [Cosmos DB Resource Tokens Documentation](https://docs.microsoft.com/en-us/azure/cosmos-db/secure-access-to-data)
-- [README.md: Resource Token Implementation](./README.md#cosmos-db-resource-tokens)
-- [Azure Function Token Generator](./RemotComsosTokenGenerator/)
-- [Cosmos Client Factory Implementation](./cosmosofflinewithLCC/Data/CosmosClientFactory.cs)
-
 ---
 
 ## Notes
