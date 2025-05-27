@@ -10,25 +10,55 @@ namespace cosmosofflinewithLCC.Data
     {
         private readonly HttpClient _httpClient;
         private readonly string _tokenEndpoint;
-        private readonly string _userId;
+        private string? _userId;
         private readonly ILogger<HttpTokenProvider>? _logger;
 
-        public HttpTokenProvider(HttpClient httpClient, string tokenEndpoint, string userId, ILogger<HttpTokenProvider>? logger = null)
+        /// <summary>
+        /// Initializes a new instance of the HttpTokenProvider
+        /// </summary>
+        /// <param name="httpClient">HTTP client for making requests</param>
+        /// <param name="tokenEndpoint">Token service endpoint URL</param>
+        /// <param name="userId">Optional user ID (can be set later with SetUserId)</param>
+        /// <param name="logger">Optional logger</param>
+        public HttpTokenProvider(HttpClient httpClient, string tokenEndpoint, string? userId = null, ILogger<HttpTokenProvider>? logger = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _tokenEndpoint = tokenEndpoint ?? throw new ArgumentNullException(nameof(tokenEndpoint));
-            _userId = userId ?? throw new ArgumentNullException(nameof(userId));
+            _userId = userId; // userId is now optional
             _logger = logger;
+        }
+
+        /// <summary>
+        /// Sets or updates the user ID at runtime
+        /// </summary>
+        /// <param name="userId">The user ID to use for token requests</param>
+        /// <exception cref="ArgumentNullException">Thrown if userId is null or empty</exception>
+        public void SetUserId(string userId)
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                throw new ArgumentNullException(nameof(userId));
+            }
+            
+            _userId = userId;
+            _logger?.LogInformation("User ID updated to {UserId}", userId);
         }
 
         /// <summary>
         /// Retrieves a resource token from the HTTP token service
         /// </summary>
+        /// <exception cref="InvalidOperationException">Thrown if no user ID has been set</exception>
         public async Task<string> GetResourceTokenAsync()
         {
             try
             {
-                _logger?.LogInformation("Requesting resource token from {TokenEndpoint} for user {UserId}", _tokenEndpoint, _userId); var requestUrl = $"{_tokenEndpoint}?userId={Uri.EscapeDataString(_userId)}";
+                if (string.IsNullOrWhiteSpace(_userId))
+                {
+                    throw new InvalidOperationException("User ID must be set before requesting a resource token. Call SetUserId first.");
+                }
+
+                _logger?.LogInformation("Requesting resource token from {TokenEndpoint} for user {UserId}", _tokenEndpoint, _userId); 
+                var requestUrl = $"{_tokenEndpoint}?userId={Uri.EscapeDataString(_userId)}";
                 var response = await _httpClient.GetAsync(requestUrl);
 
                 if (!response.IsSuccessStatusCode)

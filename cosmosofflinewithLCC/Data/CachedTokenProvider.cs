@@ -27,54 +27,67 @@ namespace cosmosofflinewithLCC.Data
         }
 
         /// <summary>
+        /// Sets or updates the user ID at runtime
+        /// </summary>
+        /// <param name="userId">The user ID to use for token requests</param>
+        public void SetUserId(string userId)
+        {
+            // Forward to the inner provider
+            _innerProvider.SetUserId(userId);
+                
+            // Clear the cache since we have a new user ID
+            _logger?.LogInformation("User ID changed, invalidating token cache");
+            InvalidateCache();
+        }
+        
+        /// <summary>
+        /// Invalidates the current token cache, forcing a fresh token on next request
+        /// </summary>
+        public void InvalidateCache()
+        {
+            _cachedToken = null;
+            _tokenExpiration = DateTime.MinValue;
+        }
+        
+        /// <summary>
         /// Gets a cached token or retrieves a fresh one if the cache is expired
         /// </summary>
         public async Task<string> GetResourceTokenAsync()
         {
-            // Check if we have a valid cached token
-            if (!string.IsNullOrEmpty(_cachedToken) && DateTime.UtcNow < _tokenExpiration.Subtract(_refreshBuffer))
+            // Fast path - return cached token if it's still valid
+            if (!string.IsNullOrEmpty(_cachedToken) && _tokenExpiration > DateTime.UtcNow.Add(_refreshBuffer))
             {
-                _logger?.LogDebug("Using cached resource token (expires at {TokenExpiration})", _tokenExpiration);
+                _logger?.LogDebug("Using cached token valid until {Expiration}", _tokenExpiration);
                 return _cachedToken;
             }
 
-            // Need to refresh the token
+            // Slow path - refresh the token
             await _refreshSemaphore.WaitAsync();
             try
             {
-                // Double-check pattern - another thread might have refreshed while we were waiting
-                if (!string.IsNullOrEmpty(_cachedToken) && DateTime.UtcNow < _tokenExpiration.Subtract(_refreshBuffer))
+                // Double check after acquiring the semaphore
+                // Another thread might have refreshed while we were waiting
+                if (!string.IsNullOrEmpty(_cachedToken) && _tokenExpiration > DateTime.UtcNow.Add(_refreshBuffer))
                 {
-                    _logger?.LogDebug("Using cached resource token (refreshed by another thread)");
+                    _logger?.LogDebug("Using cached token valid until {Expiration} (after semaphore check)", _tokenExpiration);
                     return _cachedToken;
                 }
 
-                _logger?.LogInformation("Refreshing resource token (previous token expires at {TokenExpiration})", _tokenExpiration);
+                // Actually refresh the token
+                _logger?.LogInformation("Refreshing token, current expires at {Expiration}", _tokenExpiration);
+                _cachedToken = await _innerProvider.GetResourceTokenAsync();
 
-                var newToken = await _innerProvider.GetResourceTokenAsync();
-
-                // Assume token is valid for 1 hour (typical Cosmos resource token lifetime)
-                // In a real implementation, you might parse the token to get actual expiration
+                // Estimate token expiration (typically resource tokens last 1 hour)
+                // The actual expiration time might depend on your token service configuration
                 _tokenExpiration = DateTime.UtcNow.AddHours(1);
-                _cachedToken = newToken;
+                _logger?.LogInformation("Token refreshed, new expiration at {Expiration}", _tokenExpiration);
 
-                _logger?.LogInformation("Successfully refreshed resource token (new expiration: {TokenExpiration})", _tokenExpiration);
-                return newToken;
+                return _cachedToken;
             }
             finally
             {
                 _refreshSemaphore.Release();
             }
-        }
-
-        /// <summary>
-        /// Clears the cached token to force a refresh on next request
-        /// </summary>
-        public void InvalidateCache()
-        {
-            _logger?.LogInformation("Invalidating cached token");
-            _cachedToken = null;
-            _tokenExpiration = DateTime.MinValue;
         }
     }
 }

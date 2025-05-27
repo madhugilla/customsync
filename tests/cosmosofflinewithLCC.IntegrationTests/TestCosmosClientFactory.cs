@@ -31,8 +31,10 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var tokenProvider = new HttpTokenProvider(
                 httpClient,
                 azureFunctionEndpoint,
-                userId,
                 logger: null); // Could add logger if needed
+                
+            // Set the user ID
+            tokenProvider.SetUserId(userId);
 
             // Create the actual factory with token provider
             _innerFactory = new CosmosClientFactory(tokenProvider, cosmosEndpoint);

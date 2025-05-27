@@ -28,8 +28,7 @@ namespace cosmosofflinewithLCC
                     string sqlitePath = "local.db";
 
                     // Register token provider and client factory for token-based authentication
-                    // TODO: Replace SampleTokenProvider with your actual token provider implementation
-                    // Examples: HttpTokenProvider, Azure Function client, Service Bus consumer, etc.
+                    // We don't pass the userId in the constructor anymore, it will be set at runtime
                     services.AddSingleton<ICosmosTokenProvider>(provider =>
                         new SampleTokenProvider(tokenEndpoint));
 
@@ -146,13 +145,22 @@ namespace cosmosofflinewithLCC
                     // Register AssessmentPlanService
                     services.AddScoped<Services.AssessmentPlanService>();
                 })
-                .Build();            // Get the required services
+                .Build();
+
+            // Get the required services
             using var serviceScope = host.Services.CreateScope();
             var syncEngineOrder = serviceScope.ServiceProvider.GetRequiredService<SyncEngine<Order>>();
             var logger = serviceScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            var tokenProvider = serviceScope.ServiceProvider.GetRequiredService<ICosmosTokenProvider>();
 
             // Set the current user ID - in a real app this would come from authentication
-            string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";            // Check if this is the first launch by checking if the SQLite DB exists and has any data
+            string currentUserId = Environment.GetEnvironmentVariable("CURRENT_USER_ID") ?? "user1";
+
+            // Set the user ID on the token provider
+            logger.LogInformation("Setting user ID to {UserId} on token provider", currentUserId);
+            tokenProvider.SetUserId(currentUserId);
+
+            // Check if this is the first launch by checking if the SQLite DB exists and has any data
             string sqlitePath = "local.db";
             var localStore = serviceScope.ServiceProvider.GetRequiredService<IDocumentStore<Order>>();
             bool isFirstLaunch = !File.Exists(sqlitePath) || await IsLocalDbEmpty<Order>(localStore);

@@ -10,5 +10,11 @@ namespace cosmosofflinewithLCC.Data
         /// </summary>
         /// <returns>Resource token string</returns>
         Task<string> GetResourceTokenAsync();
+        
+        /// <summary>
+        /// Sets or updates the user ID at runtime
+        /// </summary>
+        /// <param name="userId">The user ID to use for token requests</param>
+        void SetUserId(string userId);
     }
 }
