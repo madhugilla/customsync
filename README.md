@@ -319,7 +319,7 @@ The application uses the following environment variables, which are automaticall
 
 - `COSMOS_ENDPOINT`: The Cosmos DB endpoint (defaults to the emulator endpoint: https://localhost:8081/)
 - `COSMOS_KEY`: The Cosmos DB key (defaults to the emulator key)
-- `CURRENT_USER_ID`: The user ID for data filtering (defaults to "user1")
+- `CURRENT_USER_ID`: The user ID for data filtering (defaults to "user1" - single user implementation)
 
 ## Project Structure
 
@@ -391,11 +391,50 @@ Cosmos DB Resource Tokens are time-limited, scoped authentication tokens that pr
 
 Our implementation follows Azure security best practices with a multi-layered approach:
 
+#### Current Implementation: Single-User Model
+
+**Important Note**: While Cosmos DB resource tokens are designed to support multiple users with individual permissions and sophisticated caching strategies, **this project currently implements a simplified single-user approach** for demonstration and development purposes:
+
+- **Single User Focus**: The system is configured for one user (`CURRENT_USER_ID` environment variable)
+- **No Token Caching**: A completely fresh token is generated for **every single operation** that requires Cosmos DB access
+- **Simplified Security Model**: Bypasses complex multi-user permission management for easier setup and testing
+
+#### Token Generation Strategy: Fresh Tokens Per Call
+
+**Current Approach**: This implementation takes a **zero-caching approach** where:
+
+- **Every Cosmos DB operation** triggers a new token request to the Azure Function
+- **No token storage** occurs on the client side - not even temporary caching
+- **Maximum Security**: Eliminates any risk of using expired or compromised tokens
+- **Simplified Logic**: No cache invalidation, refresh logic, or token lifetime management needed
+
+**Performance Trade-off**: While this approach prioritizes security and simplicity, it results in:
+- Higher network overhead (token request per operation)
+- Increased latency for each Cosmos DB interaction
+- More Azure Function invocations and associated costs
+
+#### Why Single-User Implementation?
+
+1. **Simplicity**: Easier to understand and debug during development
+2. **Maximum Security**: Fresh tokens eliminate cache-related security concerns
+3. **Demonstration Focus**: Showcases core synchronization concepts without multi-user complexity
+4. **Development Speed**: Faster iteration without user management overhead
+
+#### Future Enhancement: Token Caching
+
+**Potential Caching Implementation**: While this project currently generates fresh tokens for every operation, **future versions could implement intelligent token caching** to improve performance:
+
+**Caching Strategy Options**:
+- **Time-Based Caching**: Cache tokens for a portion of their lifetime (e.g., 45 minutes of 1-hour expiry)
+- **Automatic Refresh**: Proactively refresh tokens before expiry to avoid interruption
+- **Memory-Based Storage**: Store tokens in memory with automatic cleanup on expiry
+- **Background Refresh**: Refresh tokens in background threads to minimize latency
+
 #### Architecture Overview:
-1. **Azure Function Token Generator**: Secure server-side token generation
+1. **Azure Function Token Generator**: Secure server-side token generation (single user)
 2. **Factory Pattern**: On-demand client creation with fresh tokens
-3. **Caching Layer**: Intelligent token caching to optimize performance
-4. **User-Specific Permissions**: Each user gets isolated database access
+3. **Per-Access Token Generation**: New tokens created for each synchronization operation
+4. **Environment-Based User ID**: User identity set via `CURRENT_USER_ID` configuration
 
 #### Key Components:
 
@@ -465,18 +504,13 @@ sequenceDiagram
     Note over Client,LocalDB: Normal App Operations (Offline-First)
     Client->>LocalDB: Read/Write Operations
     LocalDB->>LocalDB: Track Pending Changes
+      Note over Client,CosmosDB: Synchronization with Fresh Token (No Caching)
     
-    Note over Client,CosmosDB: Synchronization with Fresh Token
-    Client->>Client: Check token expiry (cached)
-    
-    alt Token Still Valid
-        Client->>Client: Use Cached Token
-    else Token Expired/Near Expiry
-        Client->>TokenService: Request Fresh Token
-        TokenService->>CosmosDB: Verify/Update Permission
-        CosmosDB-->>TokenService: New Resource Token
-        TokenService-->>Client: Fresh Token
-    end
+    Note over Client: Every operation requests<br/>a completely fresh token
+    Client->>TokenService: Request Fresh Token (Per Operation)
+    TokenService->>CosmosDB: Verify/Update Permission
+    CosmosDB-->>TokenService: New Resource Token
+    TokenService-->>Client: Fresh Token
     
     Note over Client,CosmosDB: Sync Operations with Token
     Client->>CosmosDB: Push Local Changes<br/>(using resource token)
@@ -492,10 +526,10 @@ sequenceDiagram
 ### Implementation Details
 
 #### Token Lifecycle Management:
-1. **Generation**: Azure Function creates user-specific permissions
-2. **Caching**: Client caches tokens until near expiry
-3. **Refresh**: Automatic token refresh before expiration
-4. **Expiry**: Tokens automatically become invalid after 1 hour
+1. **Generation**: Azure Function creates user-specific permissions for each request
+2. **No Caching**: Tokens are used immediately and not stored anywhere
+3. **Per-Operation Refresh**: Every Cosmos DB operation gets a completely fresh token
+4. **Immediate Expiry Handling**: No token expiry issues since tokens are always fresh
 
 #### Error Handling:
 - **Token Expiry**: Operations fail with 401, triggering refresh
@@ -503,24 +537,10 @@ sequenceDiagram
 - **Service Unavailable**: Graceful degradation to offline-only mode
 
 #### Performance Optimizations:
-- **Token Caching**: Reduces token service calls by ~95%
-- **Fresh Tokens**: Each operation gets a current, valid token
+- **No Token Caching**: Current implementation prioritizes security over performance
+- **Fresh Tokens**: Each operation gets a current, valid token (maximum security)
 - **Connection Pooling**: Optimized for short-lived client instances
 - **Batch Operations**: Efficient multi-document operations
-
-### Production Considerations
-
-#### Security Best Practices:
-- **Token Service Security**: Secure the Azure Function with proper authentication
-- **HTTPS Only**: All token requests use encrypted connections
-- **Audit Logging**: Monitor token generation and usage patterns
-- **User Validation**: Verify user identity before token generation
-
-#### Monitoring & Observability:
-- **Token Request Frequency**: Monitor unusual token request patterns
-- **Expiry Events**: Track token expiry and refresh cycles
-- **Error Rates**: Monitor authentication failures and retries
-- **Performance Metrics**: Track token generation and validation times
 
 #### Deployment Architecture:
 ```mermaid
@@ -564,10 +584,11 @@ graph TB
 {
   "COSMOS_ENDPOINT": "https://your-cosmos.documents.azure.com:443/",
   "TOKEN_ENDPOINT": "https://your-function-app.azurewebsites.net/api/GetCosmosToken",
-  "CURRENT_USER_ID": "user1",
-  "TOKEN_CACHE_DURATION": "3600"
+  "CURRENT_USER_ID": "user1"
 }
 ```
+
+**Note**: `TOKEN_CACHE_DURATION` is not needed since this implementation doesn't cache tokens.
 
 This resource token implementation ensures that:
 - **Security**: No long-lived credentials are stored on client devices
@@ -578,6 +599,7 @@ This resource token implementation ensures that:
 
 ## Limitations
 
+- **Single-User Implementation**: Currently configured for one user only (see Resource Token section for details)
 - Soft deletes not yet implemented (see TODO in SyncEngine)
 - Partial document updates not supported
 - Resource token expiry requires network connectivity for refresh
