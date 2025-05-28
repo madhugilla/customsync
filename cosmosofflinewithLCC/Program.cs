@@ -172,9 +172,12 @@ namespace cosmosofflinewithLCC
 
             // Demonstrate Order operations
             await DemonstrateOrderOperations(serviceScope, syncEngineOrder, logger, currentUserId);
-        }        /// <summary>
-                 /// Performs initial data pull for Orders
-                 /// </summary>
+
+            //            await DemonstrateItemServiceOperations();
+        }
+        /// <summary>
+        /// Performs initial data pull for Orders
+        /// </summary>
         private static async Task InitialDataPullAsync(
             SyncEngine<Order> syncEngineOrder,
             ILogger logger,
@@ -226,6 +229,53 @@ namespace cosmosofflinewithLCC
             // Verify the order was synced
             var syncedOrder = await orderRemoteStore.GetAsync("order1", currentUserId);
             Console.WriteLine($"Order Description: {syncedOrder?.Description}");
+        }
+
+        /// <summary>
+        /// Demonstrates ItemService operations including creation and sync
+        /// </summary>
+        private static async Task DemonstrateItemServiceOperations()
+        {
+            var itemService = new Services.ItemService();
+            var logger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<Program>();
+
+            try
+            {
+                // Check if initial data pull is needed
+                if (await itemService.IsLocalStoreEmptyAsync())
+                {
+                    logger.LogInformation("Local store is empty, performing initial data pull...");
+                    await itemService.InitialDataPullAsync();
+                }
+
+                // Create a new item
+                var item = new Item()
+                {
+                    ID = Guid.NewGuid().ToString(),
+                    Content = "Test item created by ItemService",
+                    LastModified = DateTime.UtcNow
+                };
+
+                // Add to local store
+                await itemService.AddOrUpdateLocalItemAsync(item);
+                logger.LogInformation("Created local item with ID: {ItemId}", item.ID);
+
+                // Sync with remote store
+                await itemService.SyncItemsAsync();
+                logger.LogInformation("Item sync completed successfully");
+
+                // Get all local items
+                var localItems = await itemService.GetAllLocalItemsAsync();
+                logger.LogInformation("Found {Count} items in local store", localItems.Count);
+
+                // Get all remote items
+                var remoteItems = await itemService.GetAllRemoteItemsAsync();
+                logger.LogInformation("Found {Count} items in remote store", remoteItems.Count);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error during ItemService operations");
+            }
         }
     }
 }
