@@ -1,6 +1,7 @@
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.Services
@@ -25,7 +26,8 @@ namespace cosmosofflinewithLCC.Services
             var tokenEndpoint = "http://localhost:7071/api/GetCosmosToken";
             var httpClient = new HttpClient();
             var httpTokenLogger = loggerFactory.CreateLogger<HttpTokenProvider>();
-            var tokenProvider = new HttpTokenProvider(httpClient, tokenEndpoint, _currentUserId, httpTokenLogger);
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var tokenProvider = new HttpTokenProvider(httpClient, tokenEndpoint, cache, _currentUserId, httpTokenLogger);
             tokenProvider.SetUserId("cosmosUser"); // Set user ID for token provider
 
             // Create cosmos client factory

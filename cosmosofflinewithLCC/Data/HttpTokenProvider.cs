@@ -1,10 +1,12 @@
+using System.Net.Http.Json;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
 namespace cosmosofflinewithLCC.Data
 {
     /// <summary>
-    /// HTTP-based token provider that retrieves Cosmos DB resource tokens from a token service
+    /// HTTP-based token provider that retrieves Cosmos DB resource tokens from a token service with caching
     /// </summary>
     public class HttpTokenProvider : ICosmosTokenProvider
     {
@@ -12,24 +14,32 @@ namespace cosmosofflinewithLCC.Data
         private readonly string _tokenEndpoint;
         private string? _userId;
         private readonly ILogger<HttpTokenProvider>? _logger;
+        private readonly IMemoryCache _cache;
 
         /// <summary>
         /// Initializes a new instance of the HttpTokenProvider
         /// </summary>
         /// <param name="httpClient">HTTP client for making requests</param>
         /// <param name="tokenEndpoint">Token service endpoint URL</param>
+        /// <param name="cache">Memory cache for token caching</param>
         /// <param name="userId">Optional user ID (can be set later with SetUserId)</param>
         /// <param name="logger">Optional logger</param>
-        public HttpTokenProvider(HttpClient httpClient, string tokenEndpoint, string? userId = null, ILogger<HttpTokenProvider>? logger = null)
+        public HttpTokenProvider(
+            HttpClient httpClient,
+            string tokenEndpoint,
+            IMemoryCache cache,
+            string? userId = null,
+            ILogger<HttpTokenProvider>? logger = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _tokenEndpoint = tokenEndpoint ?? throw new ArgumentNullException(nameof(tokenEndpoint));
-            _userId = userId; // userId is now optional
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+            _userId = userId;
             _logger = logger;
         }
 
         /// <summary>
-        /// Sets or updates the user ID at runtime
+        /// Sets or updates the user ID at runtime and clears any cached tokens for the previous user
         /// </summary>
         /// <param name="userId">The user ID to use for token requests</param>
         /// <exception cref="ArgumentNullException">Thrown if userId is null or empty</exception>
@@ -39,79 +49,90 @@ namespace cosmosofflinewithLCC.Data
             {
                 throw new ArgumentNullException(nameof(userId));
             }
-            
-            _userId = userId;
-            _logger?.LogInformation("User ID updated to {UserId}", userId);
-        }
 
-        /// <summary>
-        /// Retrieves a resource token from the HTTP token service
-        /// </summary>
-        /// <exception cref="InvalidOperationException">Thrown if no user ID has been set</exception>
+            var previousUserId = _userId;
+            _userId = userId;
+
+            // Clear cache for previous user if different
+            if (previousUserId != null && previousUserId != userId)
+            {
+                var previousCacheKey = GetCacheKey(previousUserId);
+                _cache.Remove(previousCacheKey);
+                _logger?.LogInformation("Cleared cached token for previous user {PreviousUserId}", previousUserId);
+            }
+
+            _logger?.LogInformation("User ID updated to {UserId}", userId);
+        }        /// <summary>
+                 /// Retrieves a resource token from cache or HTTP token service
+                 /// </summary>
+                 /// <exception cref="InvalidOperationException">Thrown if no user ID has been set</exception>
         public async Task<string> GetResourceTokenAsync()
         {
-            try
+            if (string.IsNullOrWhiteSpace(_userId))
             {
-                if (string.IsNullOrWhiteSpace(_userId))
-                {
-                    throw new InvalidOperationException("User ID must be set before requesting a resource token. Call SetUserId first.");
-                }
-
-                _logger?.LogInformation("Requesting resource token from {TokenEndpoint} for user {UserId}", _tokenEndpoint, _userId); 
-                var requestUrl = $"{_tokenEndpoint}?userId={Uri.EscapeDataString(_userId)}";
-                var response = await _httpClient.GetAsync(requestUrl);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var errorContent = await response.Content.ReadAsStringAsync();
-                    _logger?.LogError("Token service returned error {StatusCode}: {ErrorContent}", response.StatusCode, errorContent);
-                    throw new HttpRequestException($"Token service returned {response.StatusCode}: {errorContent}");
-                }
-
-                var responseContent = await response.Content.ReadAsStringAsync();
-
-                if (string.IsNullOrWhiteSpace(responseContent))
-                {
-                    throw new InvalidOperationException("Token service returned empty or null response");
-                }
-
-                // Try to parse as PermissionDto JSON
-                try
-                {
-                    var permissionDto = JsonConvert.DeserializeObject<PermissionDto>(responseContent);
-                    if (permissionDto?.token != null)
-                    {
-                        _logger?.LogInformation("Successfully retrieved resource token for user {UserId}", _userId);
-                        return permissionDto.token;
-                    }
-                }
-                catch (JsonException)
-                {
-                    // If JSON parsing fails, treat as plain text token
-                    _logger?.LogDebug("Response is not JSON, treating as plain text token");
-                }
-
-                // Fallback to plain text
-                var token = responseContent.Trim();
-                if (string.IsNullOrWhiteSpace(token))
-                {
-                    throw new InvalidOperationException("Token service returned empty token");
-                }
-
-                _logger?.LogInformation("Successfully retrieved resource token for user {UserId}", _userId);
-                return token;
+                throw new InvalidOperationException("User ID must be set before requesting a resource token. Call SetUserId first.");
             }
-            catch (HttpRequestException ex)
+
+            var cacheKey = GetCacheKey(_userId);
+
+            // Try to get from cache first
+            if (_cache.TryGetValue(cacheKey, out string? cachedToken))
             {
-                _logger?.LogError(ex, "Failed to retrieve resource token from {TokenEndpoint} for user {UserId}", _tokenEndpoint, _userId);
-                throw new InvalidOperationException($"Failed to retrieve resource token: {ex.Message}", ex);
-            }
-            catch (TaskCanceledException ex)
+                _logger?.LogDebug("Using cached token for user {UserId}", _userId);
+                return cachedToken!;
+            }            // Cache miss - fetch token and expiry information
+            var (token, tokenExpiry) = await FetchTokenWithExpiryAsync();
+
+            // Fixed buffer time before token expiry (5 minutes)
+            TimeSpan cacheBuffer = TimeSpan.FromMinutes(5);
+
+            // Cache with absolute expiration based on token expiry
+            var cacheOptions = new MemoryCacheEntryOptions
             {
-                _logger?.LogError(ex, "Token request timeout for {TokenEndpoint} for user {UserId}", _tokenEndpoint, _userId);
-                throw new InvalidOperationException($"Token request timeout: {ex.Message}", ex);
-            }
+                AbsoluteExpiration = tokenExpiry - cacheBuffer,
+                Priority = CacheItemPriority.Normal
+            };
+
+
+            _cache.Set(cacheKey, token, cacheOptions);
+
+            _logger?.LogInformation("Successfully retrieved and cached resource token for user {UserId} until {ExpiryTime}",
+                _userId, tokenExpiry - cacheBuffer);
+            return token;
         }
+
+
+        private string GetCacheKey(string userId) => $"cosmos_token_{userId}";
+
+        /// <summary>
+        /// Fetches a token and its expiry time from the token service
+        /// </summary>
+        /// <returns>Tuple containing the token and its expiry time</returns>
+        private async Task<(string token, DateTime tokenExpiry)> FetchTokenWithExpiryAsync()
+        {
+            _logger?.LogInformation("Requesting resource token from {TokenEndpoint} for user {UserId}", _tokenEndpoint, _userId);
+
+            var requestUrl = $"{_tokenEndpoint}?userId={Uri.EscapeDataString(_userId!)}";
+            var response = await _httpClient.GetAsync(requestUrl);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger?.LogError("Token service returned error {StatusCode}: {ErrorContent}", response.StatusCode, errorContent);
+                throw new HttpRequestException($"Token service returned {response.StatusCode}: {errorContent}");
+            }
+
+            // Use ReadFromJsonAsync for deserialization
+            var permissionDto = await response.Content.ReadFromJsonAsync<PermissionDto>();
+
+            if (permissionDto == null || permissionDto.Token == null)
+            {
+                throw new InvalidOperationException("Token service returned null or invalid token in JSON response");
+            }
+
+            return (permissionDto.Token, permissionDto.ExpiryDateTime);
+        }
+
     }
 
     /// <summary>
@@ -119,6 +140,7 @@ namespace cosmosofflinewithLCC.Data
     /// </summary>
     public class PermissionDto
     {
-        public string? token { get; set; }
+        public string? Token { get; set; }
+        public DateTime ExpiryDateTime { get; set; }
     }
 }

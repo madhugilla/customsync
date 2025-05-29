@@ -18,19 +18,28 @@ namespace cosmosofflinewithLCC
 
         public static async Task Main(string[] args)
         {
-            var host = Host.CreateDefaultBuilder(args)
-                .ConfigureServices((context, services) =>
-                {                    // Configuration from environment variables or fallback to Cosmos DB Emulator defaults
+            var host = Host.CreateDefaultBuilder(args).ConfigureServices((context, services) =>
+                {                      // Add memory cache for token caching
+                    services.AddMemoryCache();
+
+                    // Add HttpClient
+                    services.AddHttpClient();
+
+                    // Configuration from environment variables or fallback to Cosmos DB Emulator defaults
                     string cosmosEndpoint = Environment.GetEnvironmentVariable("COSMOS_ENDPOINT") ?? "https://localhost:8081/";
                     string tokenEndpoint = Environment.GetEnvironmentVariable("TOKEN_ENDPOINT") ?? "https://your-token-service/api/token";
                     string databaseId = "AppDb";
                     string containerId = "Documents"; // Single container for all document types
-                    string sqlitePath = "local.db";
-
-                    // Register token provider and client factory for token-based authentication
+                    string sqlitePath = "local.db";                    // Register token provider and client factory for token-based authentication
                     // We don't pass the userId in the constructor anymore, it will be set at runtime
                     services.AddSingleton<ICosmosTokenProvider>(provider =>
-                        new SampleTokenProvider(tokenEndpoint));
+                    {
+                        var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+                        var httpClient = httpClientFactory.CreateClient();
+                        var cache = provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>();
+                        var logger = provider.GetService<ILogger<HttpTokenProvider>>();
+                        return new HttpTokenProvider(httpClient, tokenEndpoint, cache, logger: logger);
+                    });
 
                     // Option 1: Use factory with default options (recommended)
                     // Factory automatically configures optimal settings for token-based authentication

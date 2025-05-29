@@ -2,5 +2,7 @@ namespace RemotComsosTokenGenerator;
 
 public class PermissionDto
 {
-    public string token { get; set; } = string.Empty;
+    public string Token { get; set; } = string.Empty;
+
+    public DateTime ExpiryDateTime { get; set; }
 }

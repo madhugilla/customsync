@@ -1,5 +1,6 @@
 using Microsoft.Azure.Cosmos;
 using cosmosofflinewithLCC.Data;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.IntegrationTests
@@ -25,14 +26,14 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var httpClient = new HttpClient
             {
                 Timeout = TimeSpan.FromSeconds(30)
-            };
-
-            // Create HTTP token provider that calls the Azure Function
+            };            // Create HTTP token provider that calls the Azure Function
+            var cache = new MemoryCache(new MemoryCacheOptions());
             var tokenProvider = new HttpTokenProvider(
                 httpClient,
                 azureFunctionEndpoint,
+                cache,
                 logger: null); // Could add logger if needed
-                
+
             // Set the user ID
             tokenProvider.SetUserId(userId);
 
