@@ -1,6 +1,7 @@
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Logging;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
@@ -8,12 +9,13 @@ namespace cosmosofflinewithLCC.IntegrationTests
     public class CosmosDbStoreIntegrationTests : IDisposable
     {
         private readonly CosmosDbStore<Item> _store;
-        private readonly TestCosmosClientFactory _clientFactory;
+        private readonly TestCosmosTokenProvider _tokenProvider;
         private readonly string _testUserId = "testUser1";
         private readonly string _databaseId = "SyncTestDB"; // Match Azure Function configuration
         private readonly string _containerId = "SyncTestContainer"; // Match Azure Function configuration
         private readonly string _azureFunctionUrl = "http://localhost:7071/api/GetCosmosToken";
         private readonly string _cosmosEndpoint = "https://localhost:8081"; // Cosmos DB emulator endpoint
+        private bool _disposed;
 
         public CosmosDbStoreIntegrationTests()
         {
@@ -21,11 +23,15 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             try
             {
-                // Create the HTTP token-based client factory
-                _clientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
+                // Create the HTTP token provider
+                _tokenProvider = new TestCosmosTokenProvider(_azureFunctionUrl, _testUserId);
 
-                // Create the store using the token-based factory
-                _store = new CosmosDbStore<Item>(_clientFactory, _databaseId, _containerId);
+                // Create the store with per-store client approach
+                _store = new CosmosDbStore<Item>(
+                    _tokenProvider,
+                    _cosmosEndpoint,
+                    _databaseId,
+                    _containerId);
 
                 Console.WriteLine("HTTP token-based CosmosDB store is ready");
                 Console.WriteLine($"Using Azure Function: {_azureFunctionUrl}");
@@ -36,9 +42,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             {
                 Console.WriteLine($"Error setting up HTTP token-based Cosmos DB: {ex.Message}");
                 throw;
-            }
-
-            // Clean up any existing data
+            }            // Clean up any existing data
             Console.WriteLine("Cleaning up any existing test data");
             CleanupTestData().GetAwaiter().GetResult();
         }
@@ -46,8 +50,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
         {
             try
             {
-                // Get a container instance through the client factory
-                var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+                // Initialize the store by doing a simple operation to ensure client is initialized
+                try
+                {
+                    await _store.GetAllAsync();
+                }
+                catch
+                {
+                    // Ignore errors, we just need to initialize the client
+                }                // Use the store's internal client for cleanup
+                var client = await _store.GetInternalClientAsync();
+                var container = client.GetContainer(_databaseId, _containerId);
 
                 // Use a query to find all items (regardless of partition key)
                 var query = new QueryDefinition("SELECT c.id, c.partitionKey FROM c");
@@ -79,22 +92,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
                         itemsToDelete.Add((id, partitionKey));
                     }
                 }
-
                 Console.WriteLine($"Found {itemsToDelete.Count} items to delete in cleanup");
 
                 foreach (var (id, partitionKey) in itemsToDelete)
                 {
                     try
                     {
-                        // Get a fresh container for each delete operation (fresh token)
-                        var deleteContainer = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
-                        Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
-                        await deleteContainer.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
+                        await container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
                     }
                     catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         // Ignore if item not found
-                        Console.WriteLine($"Item not found during deletion: {id} in partition {partitionKey}");
                     }
                 }
             }
@@ -104,11 +112,20 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 // Don't fail the test setup if cleanup fails
             }
         }
-
         public void Dispose()
         {
-            // Clean up any test data
-            CleanupTestData().GetAwaiter().GetResult();
+            if (_disposed) return;
+
+            // Dispose store resources
+            if (_store is IDisposable disposableStore)
+            {
+                disposableStore.Dispose();
+            }
+
+            // Dispose token provider
+            _tokenProvider.Dispose();
+
+            _disposed = true;
         }
 
         [Fact]
@@ -336,8 +353,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
         public async Task MultipleDocumentTypes_ShouldBeStoredInSameContainer()
         {
             // Arrange - create an Order class in the same container
-            var orderClientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
-            var orderStore = new CosmosDbStore<Order>(orderClientFactory, _databaseId, _containerId);
+            var orderTokenProvider = new TestCosmosTokenProvider(_azureFunctionUrl, _testUserId);
+            var orderStore = new CosmosDbStore<Order>(orderTokenProvider, _cosmosEndpoint, _databaseId, _containerId);
 
             var item = new Item
             {

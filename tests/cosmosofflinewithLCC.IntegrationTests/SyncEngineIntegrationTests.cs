@@ -10,26 +10,37 @@ namespace cosmosofflinewithLCC.IntegrationTests
     {
         private readonly SqliteStore<Item> _localStore;
         private readonly CosmosDbStore<Item> _remoteStore;
+        private readonly TestCosmosTokenProvider _tokenProvider;
         private readonly ILogger _logger;
         private readonly string _dbPath;
-        private readonly TestCosmosClientFactory _clientFactory;
         private readonly string _testUserId = "testUser1";
         private readonly string _databaseId = "SyncTestDB"; // Match Azure Function configuration
         private readonly string _containerId = "SyncTestContainer"; // Match Azure Function configuration
         private readonly string _azureFunctionUrl = "http://localhost:7071/api/GetCosmosToken";
         private readonly string _cosmosEndpoint = "https://localhost:8081"; // Cosmos DB emulator endpoint
+        private bool _disposed;
 
         public SyncEngineIntegrationTests()
         {
             // Generate a unique database path with timestamp to avoid conflicts
             _dbPath = Path.Combine(Path.GetTempPath(), $"synctest_{Guid.NewGuid()}_{DateTime.Now.Ticks}.sqlite");
-            Console.WriteLine($"Using SQLite database path: {_dbPath}"); Console.WriteLine("Setting up SyncEngine integration tests with HTTP token provider...");
+            Console.WriteLine($"Using SQLite database path: {_dbPath}");
+            Console.WriteLine("Setting up SyncEngine integration tests with HTTP token provider...");
 
             try
             {
-                // Create the HTTP token-based client factory
-                _clientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
-                Console.WriteLine("HTTP token-based CosmosDB client factory is ready");
+                // Create the HTTP token provider
+                _tokenProvider = new TestCosmosTokenProvider(_azureFunctionUrl, _testUserId);
+
+                // Setup stores with per-store client approach
+                _localStore = new SqliteStore<Item>(_dbPath);
+                _remoteStore = new CosmosDbStore<Item>(
+                    _tokenProvider,
+                    _cosmosEndpoint,
+                    _databaseId,
+                    _containerId);
+
+                Console.WriteLine("HTTP token-based CosmosDB store is ready");
                 Console.WriteLine($"Using Azure Function: {_azureFunctionUrl}");
                 Console.WriteLine($"Using Cosmos endpoint: {_cosmosEndpoint}");
                 Console.WriteLine($"Target database: {_databaseId}, container: {_containerId}");
@@ -38,9 +49,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
             {
                 Console.WriteLine($"Error setting up HTTP token-based Cosmos DB: {ex.Message}");
                 throw;
-            }// Setup SQLite and stores
-            _localStore = new SqliteStore<Item>(_dbPath);
-            _remoteStore = new CosmosDbStore<Item>(_clientFactory, _databaseId, _containerId);
+            }
 
             // Setup logger
             _logger = new LoggerFactory().CreateLogger<SyncEngineIntegrationTests>();
@@ -51,51 +60,32 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
         public void Dispose()
         {
+            if (_disposed) return;
+
             try
             {
                 // Clean up test resources
                 CleanupTestData().GetAwaiter().GetResult();
-                // Extra safety: Close all database connections by forcing garbage collection
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+
+                // Dispose of the CosmosDbStore to clean up resources
+                (_remoteStore as IDisposable)?.Dispose();
 
                 // Delete the SQLite database file
-                if (File.Exists(_dbPath))
+                try
                 {
-                    try
+                    if (File.Exists(_dbPath))
                     {
-                        // Try multiple times with short delays if needed
-                        for (int i = 0; i < 3; i++)
-                        {
-                            try
-                            {
-                                File.Delete(_dbPath);
-                                Console.WriteLine($"Successfully deleted SQLite file: {_dbPath}");
-                                break;
-                            }
-                            catch (IOException)
-                            {
-                                if (i < 2)
-                                {
-                                    Console.WriteLine($"SQLite file in use, waiting before retry: {_dbPath}");
-                                    System.Threading.Thread.Sleep(500);
-                                }
-                                else
-                                {
-                                    throw;
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error deleting SQLite file {_dbPath}: {ex.Message}");
+                        File.Delete(_dbPath);
                     }
                 }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Failed to delete SQLite database file: {ex.Message}");
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                Console.WriteLine($"Error in Dispose: {ex.Message}");
+                _disposed = true;
             }
         }
 
@@ -128,13 +118,16 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Error cleaning SQLite data: {ex.Message}");
-                }                // Clean up Cosmos DB data
+                }
+
+                // Clean up Cosmos DB data
                 try
                 {
                     Console.WriteLine("Cleaning up test data in Cosmos DB...");
 
-                    // Get a container instance through the client factory
-                    var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+                    // Get the container using the store's client
+                    var client = await _remoteStore.GetInternalClientAsync();
+                    var container = client.GetContainer(_databaseId, _containerId);
 
                     // Clean up Cosmos DB data - use a query to find all items
                     var query = new QueryDefinition("SELECT c.id, c.partitionKey, c.userId, c.Type FROM c");
@@ -173,10 +166,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                         try
                         {
                             Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
-
-                            // Get a fresh container for each delete operation (fresh token)
-                            var deleteContainer = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
-                            await deleteContainer.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
+                            await container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
                         }
                         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                         {
@@ -551,17 +541,25 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var pendingChanges = await _localStore.GetPendingChangesAsync();
             Assert.Empty(pendingChanges);
         }
-
         [Fact]
         public async Task SyncEngine_ShouldSyncDifferentDocumentTypes_WithCompositePartitionKey()
-        {            // Arrange - setup stores for both Item and Order
+        {
+            // Arrange - setup stores for both Item and Order
             var sqlitePath = Path.Combine(Path.GetTempPath(), $"doctype_sync_test_{Guid.NewGuid()}.sqlite");
             var localItemStore = new SqliteStore<Item>(sqlitePath);
-            var clientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
-            var remoteItemStore = new CosmosDbStore<Item>(clientFactory, _databaseId, _containerId);
+            var tokenProvider = new TestCosmosTokenProvider(_azureFunctionUrl, _testUserId);
+            var remoteItemStore = new CosmosDbStore<Item>(
+                tokenProvider,
+                _cosmosEndpoint,
+                _databaseId,
+                _containerId);
 
             var localOrderStore = new SqliteStore<Order>(sqlitePath);
-            var remoteOrderStore = new CosmosDbStore<Order>(clientFactory, _databaseId, _containerId);
+            var remoteOrderStore = new CosmosDbStore<Order>(
+                tokenProvider,
+                _cosmosEndpoint,
+                _databaseId,
+                _containerId);
 
             // Create an Item and an Order
             var item = new Item
@@ -582,47 +580,46 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 Type = "Order"
             };
 
-            // Add to local stores
-            await localItemStore.UpsertAsync(item);
-            await localOrderStore.UpsertAsync(order);
-
-            var itemSyncEngine = new SyncEngine<Item>(localItemStore, remoteItemStore, _logger,
-                x => x.ID, x => x.LastModified, _testUserId);
-
-            var orderSyncEngine = new SyncEngine<Order>(localOrderStore, remoteOrderStore, _logger,
-                x => x.ID, x => x.LastModified, _testUserId);
-
-            // Act
-            await itemSyncEngine.SyncAsync();
-            await orderSyncEngine.SyncAsync();
-
-            // Assert
-            var remoteItem = await remoteItemStore.GetAsync(item.ID, _testUserId);
-            var remoteOrder = await remoteOrderStore.GetAsync(order.ID, _testUserId); Assert.NotNull(remoteItem);
-            Assert.Equal(item.Content, remoteItem.Content);
-            Assert.Equal("Item", remoteItem.Type);
-
-            Assert.NotNull(remoteOrder);
-            Assert.Equal(order.Description, remoteOrder.Description);
-            Assert.Equal("Order", remoteOrder.Type);
-
-            // Verify pending changes are removed after sync
-            var pendingItemChanges = await localItemStore.GetPendingChangesAsync();
-            var pendingOrderChanges = await localOrderStore.GetPendingChangesAsync();
-            Assert.Empty(pendingItemChanges);
-            Assert.Empty(pendingOrderChanges);
-
-            // Cleanup
-            if (File.Exists(sqlitePath))
+            try
             {
-                try
-                {
-                    File.Delete(sqlitePath);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error deleting temp SQLite file: {ex.Message}");
-                }
+                // Add to local stores
+                await localItemStore.UpsertAsync(item);
+                await localOrderStore.UpsertAsync(order);
+
+                var itemSyncEngine = new SyncEngine<Item>(localItemStore, remoteItemStore, _logger,
+                    x => x.ID, x => x.LastModified, _testUserId);
+
+                var orderSyncEngine = new SyncEngine<Order>(localOrderStore, remoteOrderStore, _logger,
+                    x => x.ID, x => x.LastModified, _testUserId);
+
+                // Act
+                await itemSyncEngine.SyncAsync();
+                await orderSyncEngine.SyncAsync();
+
+                // Assert
+                var remoteItem = await remoteItemStore.GetAsync(item.ID, _testUserId);
+                var remoteOrder = await remoteOrderStore.GetAsync(order.ID, _testUserId);
+
+                Assert.NotNull(remoteItem);
+                Assert.Equal(item.Content, remoteItem.Content);
+                Assert.Equal("Item", remoteItem.Type);
+
+                Assert.NotNull(remoteOrder);
+                Assert.Equal(order.Description, remoteOrder.Description);
+                Assert.Equal("Order", remoteOrder.Type);
+
+                // Verify pending changes are removed after sync
+                var pendingItemChanges = await localItemStore.GetPendingChangesAsync();
+                var pendingOrderChanges = await localOrderStore.GetPendingChangesAsync();
+                Assert.Empty(pendingItemChanges);
+                Assert.Empty(pendingOrderChanges);
+            }
+            finally
+            {
+                // Clean up resources
+                (remoteItemStore as IDisposable)?.Dispose();
+                (remoteOrderStore as IDisposable)?.Dispose();
+                tokenProvider.Dispose();
             }
         }
 

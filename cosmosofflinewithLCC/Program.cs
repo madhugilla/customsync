@@ -30,7 +30,9 @@ namespace cosmosofflinewithLCC
                     string tokenEndpoint = Environment.GetEnvironmentVariable("TOKEN_ENDPOINT") ?? "https://your-token-service/api/token";
                     string databaseId = "AppDb";
                     string containerId = "Documents"; // Single container for all document types
-                    string sqlitePath = "local.db";                    // Register token provider and client factory for token-based authentication
+                    string sqlitePath = "local.db";
+
+                    // Register token provider for token-based authentication
                     // We don't pass the userId in the constructor anymore, it will be set at runtime
                     services.AddSingleton<ICosmosTokenProvider>(provider =>
                     {
@@ -41,40 +43,7 @@ namespace cosmosofflinewithLCC
                         return new HttpTokenProvider(httpClient, tokenEndpoint, cache, logger: logger);
                     });
 
-                    // Option 1: Use factory with default options (recommended)
-                    // Factory automatically configures optimal settings for token-based authentication
-                    services.AddSingleton<ICosmosClientFactory>(provider =>
-                    {
-                        var tokenProvider = provider.GetRequiredService<ICosmosTokenProvider>();
-                        return new CosmosClientFactory(tokenProvider, cosmosEndpoint);
-                    });
-
-                    // Option 2: Use factory with environment-specific configuration
-                    // Uncomment if you need environment-specific settings
-                    /*
-                    services.AddSingleton<ICosmosClientFactory>(provider =>
-                    {
-                        var tokenProvider = provider.GetRequiredService<ICosmosTokenProvider>();
-                        var isDevelopment = Environment.GetEnvironmentVariable("ENVIRONMENT") == "Development";
-                        return new CosmosClientFactory(tokenProvider, cosmosEndpoint, isDevelopment);
-                    });
-                    */
-
-                    // Option 3: Use factory with custom options
-                    // Uncomment if you need specific configuration
-                    /*
-                    services.AddSingleton<ICosmosClientFactory>(provider =>
-                    {
-                        var tokenProvider = provider.GetRequiredService<ICosmosTokenProvider>();
-                        var customOptions = new CosmosClientOptions
-                        {
-                            ConnectionMode = ConnectionMode.Direct,
-                            MaxRetryAttemptsOnRateLimitedRequests = 5,
-                            RequestTimeout = TimeSpan.FromSeconds(90)
-                        };
-                        return new CosmosClientFactory(tokenProvider, cosmosEndpoint, customOptions);
-                    });
-                    */
+                    // Remove CosmosDbClientManager registration as we're now using per-store clients
 
                     // Register stores for Item type
                     services.AddSingleton<IDocumentStore<Item>>(provider =>
@@ -82,10 +51,17 @@ namespace cosmosofflinewithLCC
                         var sqlite = new SqliteStore<Item>(sqlitePath);
                         return sqlite;
                     });
+
                     services.AddSingleton<CosmosDbStore<Item>>(provider =>
                     {
-                        var clientFactory = provider.GetRequiredService<ICosmosClientFactory>();
-                        return new CosmosDbStore<Item>(clientFactory, databaseId, containerId);
+                        var tokenProvider = provider.GetRequiredService<ICosmosTokenProvider>();
+                        var logger = provider.GetService<ILogger<CosmosDbStore<Item>>>();
+                        return new CosmosDbStore<Item>(
+                            tokenProvider,
+                            cosmosEndpoint,
+                            databaseId,
+                            containerId,
+                            logger: logger);
                     });
 
                     // Register stores for Order type - using the same container but different partition key
@@ -94,10 +70,17 @@ namespace cosmosofflinewithLCC
                         var sqlite = new SqliteStore<Order>(sqlitePath);
                         return sqlite;
                     });
+
                     services.AddSingleton<CosmosDbStore<Order>>(provider =>
                     {
-                        var clientFactory = provider.GetRequiredService<ICosmosClientFactory>();
-                        return new CosmosDbStore<Order>(clientFactory, databaseId, containerId);
+                        var tokenProvider = provider.GetRequiredService<ICosmosTokenProvider>();
+                        var logger = provider.GetService<ILogger<CosmosDbStore<Order>>>();
+                        return new CosmosDbStore<Order>(
+                            tokenProvider,
+                            cosmosEndpoint,
+                            databaseId,
+                            containerId,
+                            logger: logger);
                     });
 
                     // Register stores for AssessmentPlan type - using the same container but different partition key
@@ -106,10 +89,17 @@ namespace cosmosofflinewithLCC
                         var sqlite = new SqliteStore<AssessmentPlan>(sqlitePath);
                         return sqlite;
                     });
+
                     services.AddSingleton<CosmosDbStore<AssessmentPlan>>(provider =>
                     {
-                        var clientFactory = provider.GetRequiredService<ICosmosClientFactory>();
-                        return new CosmosDbStore<AssessmentPlan>(clientFactory, databaseId, containerId);
+                        var tokenProvider = provider.GetRequiredService<ICosmosTokenProvider>();
+                        var logger = provider.GetService<ILogger<CosmosDbStore<AssessmentPlan>>>();
+                        return new CosmosDbStore<AssessmentPlan>(
+                            tokenProvider,
+                            cosmosEndpoint,
+                            databaseId,
+                            containerId,
+                            logger: logger);
                     });
 
                     // Register logging

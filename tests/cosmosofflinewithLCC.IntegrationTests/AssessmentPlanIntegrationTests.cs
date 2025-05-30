@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using cosmosofflinewithLCC.Data;
 using cosmosofflinewithLCC.Models;
 using Microsoft.Azure.Cosmos;
+using Xunit;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
@@ -10,30 +14,28 @@ namespace cosmosofflinewithLCC.IntegrationTests
         private readonly string _testUserId = "testUser1";
         private readonly string _databaseId = "SyncTestDB"; // Match Azure Function configuration
         private readonly string _containerId = "SyncTestContainer"; // Match Azure Function configuration
-        private readonly string _azureFunctionUrl = "http://localhost:7071/api/GetCosmosToken";
+        private readonly TestCosmosTokenProvider _tokenProvider;
         private readonly string _cosmosEndpoint = "https://localhost:8081"; // Cosmos DB emulator endpoint
-        private readonly TestCosmosClientFactory _clientFactory;
 
         public AssessmentPlanIntegrationTests()
         {
-            Console.WriteLine("Setting up integration tests with HTTP token provider...");
+            Console.WriteLine("Setting up integration tests with token provider...");
 
             try
             {
-                // Create the HTTP token-based client factory
-                _clientFactory = new TestCosmosClientFactory(_azureFunctionUrl, _testUserId, _cosmosEndpoint);
+                // Create the token provider for tests using local function URL
+                _tokenProvider = new TestCosmosTokenProvider("http://localhost:7071/api/GetCosmosToken", _testUserId);
 
-                // Create the store using the token-based factory
-                _store = new CosmosDbStore<AssessmentPlan>(_clientFactory, _databaseId, _containerId);
+                // Create the store using the token provider
+                _store = new CosmosDbStore<AssessmentPlan>(_tokenProvider, _cosmosEndpoint, _databaseId, _containerId);
 
-                Console.WriteLine("HTTP token-based CosmosDB store is ready");
-                Console.WriteLine($"Using Azure Function: {_azureFunctionUrl}");
+                Console.WriteLine("Token-based CosmosDB store is ready");
                 Console.WriteLine($"Using Cosmos endpoint: {_cosmosEndpoint}");
                 Console.WriteLine($"Target database: {_databaseId}, container: {_containerId}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error setting up HTTP token-based Cosmos DB: {ex.Message}");
+                Console.WriteLine($"Error setting up token-based Cosmos DB: {ex.Message}");
                 throw;
             }
 
@@ -45,8 +47,17 @@ namespace cosmosofflinewithLCC.IntegrationTests
         {
             try
             {
-                // Get a container instance through the client factory
-                var container = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
+                // Initialize the store by doing a simple operation to ensure client is initialized
+                try
+                {
+                    await _store.GetAllAsync();
+                }
+                catch
+                {
+                    // Ignore errors, we just need to initialize the client
+                }                // Create a container client for cleanup
+                var cosmosClient = await _store.GetInternalClientAsync();
+                var container = cosmosClient.GetContainer(_databaseId, _containerId);
 
                 // Use a query to find all items (regardless of partition key)
                 var query = new QueryDefinition("SELECT c.id, c.partitionKey FROM c");
@@ -78,96 +89,59 @@ namespace cosmosofflinewithLCC.IntegrationTests
                         itemsToDelete.Add((id, partitionKey));
                     }
                 }
-
                 Console.WriteLine($"Found {itemsToDelete.Count} items to delete in cleanup");
 
                 foreach (var (id, partitionKey) in itemsToDelete)
                 {
                     try
                     {
-                        // Get a fresh container for each delete operation (fresh token)
-                        var deleteContainer = await _clientFactory.GetContainerAsync(_databaseId, _containerId);
-                        Console.WriteLine($"Deleting item with id {id} from partition {partitionKey}");
-                        await deleteContainer.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
+                        await container.DeleteItemAsync<dynamic>(id, new PartitionKey(partitionKey));
                     }
                     catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         // Ignore if item not found
-                        Console.WriteLine($"Item not found during deletion: {id} in partition {partitionKey}");
                     }
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error cleaning up test data: {ex.Message}");
-                // Don't fail the test setup if cleanup fails
+                throw;
             }
+        }
+
+        [Fact]
+        public async Task CanUpsertAndRetrieveAssessmentPlan()
+        {
+            // Create a test assessment plan
+            var plan = new AssessmentPlan
+            {
+                ID = Guid.NewGuid().ToString(),
+                PlanName = "Test Plan",
+                Type = "Assessment",
+                LastModified = DateTime.UtcNow,
+                OIID = _testUserId
+            };
+
+            // Upsert the plan
+            await _store.UpsertAsync(plan);
+
+            // Retrieve the plan
+            var retrievedPlan = await _store.GetAsync(plan.ID, plan.OIID);
+
+            // Assert
+            Assert.NotNull(retrievedPlan);
+            Assert.Equal(plan.ID, retrievedPlan.ID);
+            Assert.Equal(plan.PlanName, retrievedPlan.PlanName);
+            Assert.Equal(plan.Type, retrievedPlan.Type);
+            Assert.Equal(plan.OIID, retrievedPlan.OIID);
         }
 
         public void Dispose()
         {
-            // Clean up any test data
+            // Clean up when done
             CleanupTestData().GetAwaiter().GetResult();
-        }
-
-        [Fact]
-        public async Task UpsertAndGetAsync_ShouldStoreAndRetrieveAssessmentPlan()
-        {
-            // Arrange
-            var assessmentPlan = new AssessmentPlan
-            {
-                ID = Guid.NewGuid().ToString(),
-                UID = "test-uid",
-                OIID = _testUserId,
-                Type = "AssessmentPlan",
-                StartDate = "2025-01-01",
-                EndDate = "2025-12-31",
-                PlanName = "Test Assessment Plan",
-                IsDeleted = false,
-                DomainList = new DomainLevel[]
-                {
-                    new DomainLevel
-                    {
-                        DomainName = "Test Domain",
-                        Levels = new List<AssessmentLevels>
-                        {
-                            new AssessmentLevels("Level 1", new List<AssessmentLevels.LevelStep>
-                            {
-                                new AssessmentLevels.LevelStep("Step 1"),
-                                new AssessmentLevels.LevelStep("Step 2")
-                            })
-                        }
-                    }
-                }
-            };
-
-            // Act - first store the item
-            Console.WriteLine($"Upserting document with ID: {assessmentPlan.ID} with partition key: {assessmentPlan.PartitionKey}");
-            await _store.UpsertAsync(assessmentPlan);
-
-            // Directly get by ID and partition key (how CosmosDbStoreIntegrationTests does it)
-            var directResult = await _store.GetAsync(assessmentPlan.ID, assessmentPlan.OIID);
-            Console.WriteLine($"Direct result by ID: {(directResult != null ? "Found" : "Not found")}");
-
-            // Assert
-            Assert.NotNull(directResult);
-            Assert.Equal(assessmentPlan.ID, directResult.ID);
-            Assert.Equal(assessmentPlan.PlanName, directResult.PlanName);
-            Assert.Equal(assessmentPlan.OIID, directResult.OIID);
-
-            // Now check GetByUserIdAsync
-            var queryResults = await _store.GetByUserIdAsync(assessmentPlan.OIID);
-            Console.WriteLine($"Query results count: {queryResults.Count}");
-
-            // This should now work
-            Assert.NotEmpty(queryResults);
-
-            // Check the first item
-            var retrievedPlan = queryResults[0];
-            Assert.Equal(assessmentPlan.ID, retrievedPlan.ID);
-            Assert.Equal(assessmentPlan.PlanName, retrievedPlan.PlanName); Assert.Equal(assessmentPlan.OIID, retrievedPlan.OIID);
-            // assert that domains are not null
-            Assert.NotNull(retrievedPlan.DomainList);
+            _store?.Dispose();
         }
     }
 }

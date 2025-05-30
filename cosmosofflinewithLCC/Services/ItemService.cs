@@ -20,9 +20,9 @@ namespace cosmosofflinewithLCC.Services
 
             // Create logger factory and logger
             var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
-            _logger = loggerFactory.CreateLogger<ItemService>();
+            _logger = loggerFactory.CreateLogger<ItemService>(); _localStore = new SqliteStore<Item>("itemService.db");
 
-            _localStore = new SqliteStore<Item>("itemService.db");            // Create token provider
+            // Create token provider
             var tokenEndpoint = "http://localhost:7071/api/GetCosmosToken";
             var httpClient = new HttpClient();
             var httpTokenLogger = loggerFactory.CreateLogger<HttpTokenProvider>();
@@ -30,14 +30,12 @@ namespace cosmosofflinewithLCC.Services
             var tokenProvider = new HttpTokenProvider(httpClient, tokenEndpoint, cache, _currentUserId, httpTokenLogger);
             tokenProvider.SetUserId("cosmosUser"); // Set user ID for token provider
 
-            // Create cosmos client factory
+            // Create remote store with per-store client pattern
             var cosmosEndpoint = "https://localhost:8081";
-            var clientFactory = new CosmosClientFactory(tokenProvider, cosmosEndpoint, true);
-
-            // Create remote store
             var databaseId = "SyncTestDB";
             var containerId = "SyncTestContainer";
-            _remoteStore = new CosmosDbStore<Item>(clientFactory, databaseId, containerId);
+            var cosmosLogger = loggerFactory.CreateLogger<CosmosDbStore<Item>>();
+            _remoteStore = new CosmosDbStore<Item>(tokenProvider, cosmosEndpoint, databaseId, containerId, null, cosmosLogger);
 
             // Create sync engine
             _syncEngine = new SyncEngine<Item>(
