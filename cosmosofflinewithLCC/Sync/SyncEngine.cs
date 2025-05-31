@@ -91,6 +91,34 @@ namespace cosmosofflinewithLCC.Sync
                 _logger.LogError(ex, "Error occurred during sync: {Message}", ex.Message);
                 throw;
             }
+        }        /// <summary>
+                 /// Pushes only local changes to the remote store without pulling remote changes back.
+                 /// This method bypasses conflict checking and pushes all pending changes directly.
+                 /// Use this when you want to upload local data without modifying your local store.
+                 /// </summary>
+                 /// <returns>The number of items that were pushed to the remote store</returns>
+        public async Task<int> ForcePushAllAsync()
+        {
+            _logger.LogInformation("Starting push-only operation for type {Type} and user {UserId}", typeof(TDocument).Name, _userId);
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                // Push local changes to remote without conflict checking
+                int itemsPushed = await PushPendingChangesDirectly();
+                _logger.LogInformation("Pushed {Count} local changes to remote store", itemsPushed);
+
+                stopwatch.Stop();
+                _logger.LogInformation("Push-only operation completed in {ElapsedMilliseconds}ms. Pushed: {ItemsPushed}",
+                    stopwatch.ElapsedMilliseconds, itemsPushed);
+
+                return itemsPushed;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred during push-only operation: {Message}", ex.Message);
+                throw;
+            }
         }
 
         /// <summary>
@@ -409,5 +437,74 @@ namespace cosmosofflinewithLCC.Sync
 
             throw new ArgumentException("Expression must be a property access expression", nameof(propertyExpression));
         }
+
+        /// <summary>
+        /// Pushes all pending changes directly to remote without conflict checking.
+        /// This method bypasses remote validation and pushes all local changes.
+        /// </summary>
+        /// <returns>The number of items pushed to the remote store</returns>
+        private async Task<int> PushPendingChangesDirectly()
+        {
+            int itemsPushed = 0;
+            var pendingChanges = await _local.GetPendingChangesAsync();
+            _logger.LogInformation("Found {Count} pending changes to push directly to remote", pendingChanges.Count);
+
+            // Optimization: Quit early if no pending changes
+            if (pendingChanges.Count == 0)
+            {
+                return 0;
+            }
+
+            var itemsToUpsert = new List<TDocument>();
+            var idsToRemove = new List<string>();
+
+            // Process all pending changes without remote validation
+            foreach (var localChange in pendingChanges)
+            {
+                // Get or infer the document type
+                string docType = typeof(TDocument).Name;
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
+                {
+                    var currentTypeValue = typeProp.GetValue(localChange)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
+                    {
+                        docType = currentTypeValue;
+                    }
+                }
+
+                // Ensure common properties are set
+                EnsureCommonProperties(localChange, _userId, docType);
+
+                var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(localChange)?.ToString();
+                if (string.IsNullOrEmpty(id))
+                {
+                    _logger.LogWarning("Item has null or empty ID and will be skipped");
+                    continue;
+                }
+
+                _logger.LogInformation("Preparing item with Id {Id} for direct push to remote", id);
+                itemsToUpsert.Add(localChange);
+                idsToRemove.Add(id);
+            }
+
+            // Perform bulk upsert for all items
+            if (itemsToUpsert.Any())
+            {
+                await _remote.UpsertBulkAsync(itemsToUpsert, true);
+                itemsPushed = itemsToUpsert.Count;
+                _logger.LogInformation("Successfully pushed {Count} items directly to remote", itemsPushed);
+            }
+
+            // Remove all items from pending changes
+            foreach (var id in idsToRemove)
+            {
+                await _local.RemovePendingChangeAsync(id);
+            }
+
+            return itemsPushed;
+        }
+
+        // ...existing methods...
     }
 }
