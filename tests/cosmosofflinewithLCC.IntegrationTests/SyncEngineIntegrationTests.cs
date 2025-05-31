@@ -893,5 +893,272 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var pendingChanges = await _localStore.GetPendingChangesAsync();
             Assert.Empty(pendingChanges);
         }
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldPushItemToRemote_WhenItemExistsInLocal()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var itemId = Guid.NewGuid().ToString();
+            var localItem = new Item
+            {
+                ID = itemId,
+                Content = "New item content",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add item to local store with pending change
+            await _localStore.UpsertAsync(localItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.PushNewItemDirectlyAsync(itemId);
+
+            // Assert
+            Assert.True(result);
+
+            // Verify item exists in remote store
+            var remoteItem = await _remoteStore.GetAsync(itemId, _testUserId);
+            Assert.NotNull(remoteItem);
+            Assert.Equal(localItem.Content, remoteItem.Content);
+            Assert.Equal(_testUserId, remoteItem.OIID);
+            Assert.Equal("Item", remoteItem.Type);
+            Assert.Equal($"{_testUserId}:Item", remoteItem.PartitionKey);
+
+            // Verify item is removed from pending changes
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.DoesNotContain(pendingChanges, item => item.ID == itemId);
+        }
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldReturnFalse_WhenItemDoesNotExistInLocal()
+        {
+            // Arrange
+            var nonExistentId = Guid.NewGuid().ToString();
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.PushNewItemDirectlyAsync(nonExistentId);
+
+            // Assert
+            Assert.False(result);
+
+            // Verify item does not exist in remote store
+            var remoteItem = await _remoteStore.GetAsync(nonExistentId, _testUserId);
+            Assert.Null(remoteItem);
+        }
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldThrowArgumentException_WhenIdIsNullOrEmpty()
+        {
+            // Arrange
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);            // Act & Assert
+            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.PushNewItemDirectlyAsync(null!));
+            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.PushNewItemDirectlyAsync(""));
+            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.PushNewItemDirectlyAsync("   "));
+        }
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldNotCheckRemoteForConflicts_UnlikeRegularSync()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var itemId = Guid.NewGuid().ToString();
+            var olderTime = now.AddMinutes(-10);
+
+            // Add item to remote with newer timestamp
+            var remoteItem = new Item
+            {
+                ID = itemId,
+                Content = "Existing remote content",
+                LastModified = now, // Newer
+                OIID = _testUserId,
+                Type = "Item"
+            };
+            await _remoteStore.UpsertAsync(remoteItem);
+
+            // Add item to local with older timestamp
+            var localItem = new Item
+            {
+                ID = itemId,
+                Content = "Local content to push directly",
+                LastModified = olderTime, // Older
+                OIID = _testUserId,
+                Type = "Item"
+            };
+            await _localStore.UpsertAsync(localItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act - Push directly (should ignore remote version)
+            var result = await syncEngine.PushNewItemDirectlyAsync(itemId);
+
+            // Assert
+            Assert.True(result);
+
+            // Verify local content overwrote remote (no conflict checking)
+            var finalRemoteItem = await _remoteStore.GetAsync(itemId, _testUserId);
+            Assert.NotNull(finalRemoteItem);
+            Assert.Equal(localItem.Content, finalRemoteItem.Content);
+            Assert.Equal(localItem.LastModified, finalRemoteItem.LastModified);
+        }
+
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldHandleGuidIds_WithoutConflicts()
+        {
+            // Arrange - This test simulates the primary use case with GUID IDs
+            var guidId1 = Guid.NewGuid().ToString();
+            var guidId2 = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+
+            var items = new List<Item>
+            {
+                new Item { ID = guidId1, Content = "GUID Item 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = guidId2, Content = "GUID Item 2", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Add items to local store
+            foreach (var item in items)
+            {
+                await _localStore.UpsertAsync(item);
+            }
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act - Push each item directly
+            var result1 = await syncEngine.PushNewItemDirectlyAsync(guidId1);
+            var result2 = await syncEngine.PushNewItemDirectlyAsync(guidId2);
+
+            // Assert
+            Assert.True(result1);
+            Assert.True(result2);
+
+            // Verify both items exist in remote
+            var remoteItem1 = await _remoteStore.GetAsync(guidId1, _testUserId);
+            var remoteItem2 = await _remoteStore.GetAsync(guidId2, _testUserId);
+
+            Assert.NotNull(remoteItem1);
+            Assert.NotNull(remoteItem2);
+            Assert.Equal("GUID Item 1", remoteItem1.Content);
+            Assert.Equal("GUID Item 2", remoteItem2.Content);
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.DoesNotContain(pendingChanges, item => item.ID == guidId1 || item.ID == guidId2);
+        }
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldBeFasterThanRegularSync_ForSingleItem()
+        {
+            // Arrange
+            var itemId = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+            var localItem = new Item
+            {
+                ID = itemId,
+                Content = "Performance test item",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            await _localStore.UpsertAsync(localItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act & Measure - Direct push
+            var stopwatch1 = System.Diagnostics.Stopwatch.StartNew();
+            var directResult = await syncEngine.PushNewItemDirectlyAsync(itemId);
+            stopwatch1.Stop();
+
+            // Clean up for next test
+            await CleanupTestData();
+
+            // Add item back for regular sync test
+            await _localStore.UpsertAsync(localItem);
+
+            // Act & Measure - Regular sync
+            var stopwatch2 = System.Diagnostics.Stopwatch.StartNew();
+            await syncEngine.SyncAsync();
+            stopwatch2.Stop();
+
+            // Assert
+            Assert.True(directResult);
+
+            // Direct push should be faster (though this is more of a performance indicator than a strict test)
+            _logger.LogInformation($"Direct push took {stopwatch1.ElapsedMilliseconds}ms, regular sync took {stopwatch2.ElapsedMilliseconds}ms");
+
+            // Both should result in the item being in remote
+            var remoteItem = await _remoteStore.GetAsync(itemId, _testUserId);
+            Assert.NotNull(remoteItem);
+            Assert.Equal(localItem.Content, remoteItem.Content);
+        }
+
+        [Fact]
+        public async Task PushNewItemDirectlyAsync_ShouldWorkWithDifferentUserIds_AfterUpdateUserId()
+        {
+            // Arrange
+            var user1 = "testUser1";
+            var user2 = "testUser2";
+            var itemId = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+
+            var itemForUser1 = new Item
+            {
+                ID = itemId,
+                Content = "Item for user 1",
+                LastModified = now,
+                OIID = user1,
+                Type = "Item"
+            };
+
+            await _localStore.UpsertAsync(itemForUser1);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, user1);
+
+            // Act - Push with original user
+            var result1 = await syncEngine.PushNewItemDirectlyAsync(itemId);
+
+            // Update user ID
+            syncEngine.UpdateUserId(user2);
+
+            // Add another item for user2
+            var itemForUser2 = new Item
+            {
+                ID = Guid.NewGuid().ToString(),
+                Content = "Item for user 2",
+                LastModified = now,
+                OIID = user2,
+                Type = "Item"
+            };
+
+            await _localStore.UpsertAsync(itemForUser2);
+
+            var result2 = await syncEngine.PushNewItemDirectlyAsync(itemForUser2.ID);
+
+            // Assert
+            Assert.True(result1);
+            Assert.True(result2);
+
+            // Verify items exist with correct user IDs
+            var remoteItem1 = await _remoteStore.GetAsync(itemId, user1);
+            var remoteItem2 = await _remoteStore.GetAsync(itemForUser2.ID, user2);
+
+            Assert.NotNull(remoteItem1);
+            Assert.NotNull(remoteItem2);
+            Assert.Equal(user1, remoteItem1.OIID);
+            Assert.Equal(user2, remoteItem2.OIID);
+        }
     }
 }
