@@ -53,3 +53,4 @@ bld/
 
 # Visual Studio cache/options directory
 .vs/
+RemotComsosTokenGenerator/local.settings.json

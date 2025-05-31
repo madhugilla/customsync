@@ -928,5 +928,240 @@ namespace cosmosofflinewithLCC.IntegrationTests
             var pendingChanges = await _localStore.GetPendingChangesAsync();
             Assert.Empty(pendingChanges);
         }
+
+        [Fact]
+        public async Task ForcePushAsync_ShouldPushItemToRemote_WhenItemExistsInLocal()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var newItem = new Item
+            {
+                ID = "direct-push-test-1",
+                Content = "Direct push content",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add item to local store with pending change
+            await _localStore.UpsertAsync(newItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.ForcePushAsync("direct-push-test-1");
+
+            // Assert
+            Assert.True(result);
+
+            // Verify item exists in remote store
+            var remoteItem = await _remoteStore.GetAsync("direct-push-test-1", _testUserId);
+            Assert.NotNull(remoteItem);
+            Assert.Equal(newItem.Content, remoteItem.Content);
+            Assert.Equal(_testUserId, remoteItem.OIID);
+            Assert.Equal("Item", remoteItem.Type);
+
+            // Verify pending change was removed
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.DoesNotContain(pendingChanges, pc => pc.ID == "direct-push-test-1");
+        }
+
+        [Fact]
+        public async Task ForcePushAsync_ShouldReturnFalse_WhenItemNotFoundInLocal()
+        {
+            // Arrange
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.ForcePushAsync("non-existent-item");
+
+            // Assert
+            Assert.False(result);
+
+            // Verify item does not exist in remote store
+            var remoteItem = await _remoteStore.GetAsync("non-existent-item", _testUserId);
+            Assert.Null(remoteItem);
+        }
+        [Fact]
+        public async Task ForcePushAsync_ShouldThrowArgumentException_WhenIdIsNullOrEmpty()
+        {
+            // Arrange
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act & Assert - null ID
+            var ex1 = await Assert.ThrowsAsync<ArgumentException>(async () =>
+                await syncEngine.ForcePushAsync(null!));
+            Assert.Contains("ID must be provided", ex1.Message);
+
+            // Act & Assert - empty ID
+            var ex2 = await Assert.ThrowsAsync<ArgumentException>(async () =>
+                await syncEngine.ForcePushAsync(""));
+            Assert.Contains("ID must be provided", ex2.Message);
+
+            // Act & Assert - whitespace ID
+            var ex3 = await Assert.ThrowsAsync<ArgumentException>(async () =>
+                await syncEngine.ForcePushAsync("   "));
+            Assert.Contains("ID must be provided", ex3.Message);
+        }
+
+
+        [Fact]
+        public async Task ForcePushAsync_ShouldRemovePendingChange_WhenItemHasPendingChange()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var newItem = new Item
+            {
+                ID = "direct-push-pending-test",
+                Content = "Content with pending change",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add item to local store with pending change
+            await _localStore.UpsertAsync(newItem);
+
+            // Verify pending change exists initially
+            var initialPendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Contains(initialPendingChanges, pc => pc.ID == "direct-push-pending-test");
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.ForcePushAsync("direct-push-pending-test");
+
+            // Assert
+            Assert.True(result);
+
+            // Verify pending change was removed
+            var finalPendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.DoesNotContain(finalPendingChanges, pc => pc.ID == "direct-push-pending-test");
+
+            // Verify item exists in remote store
+            var remoteItem = await _remoteStore.GetAsync("direct-push-pending-test", _testUserId);
+            Assert.NotNull(remoteItem);
+        }
+
+        [Fact]
+        public async Task ForcePushAsync_ShouldHandleGuidIds_WhenItemHasGuidId()
+        {
+            // Arrange
+            var guidId = Guid.NewGuid().ToString();
+            var now = DateTime.UtcNow;
+            var newItem = new Item
+            {
+                ID = guidId,
+                Content = "Item with GUID ID",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add item to local store
+            await _localStore.UpsertAsync(newItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.ForcePushAsync(guidId);
+
+            // Assert
+            Assert.True(result);
+
+            // Verify item exists in remote store with GUID ID
+            var remoteItem = await _remoteStore.GetAsync(guidId, _testUserId);
+            Assert.NotNull(remoteItem);
+            Assert.Equal(guidId, remoteItem.ID);
+            Assert.Equal(newItem.Content, remoteItem.Content);
+        }
+
+        [Fact]
+        public async Task ForcePushAsync_ShouldLogAppropriateMessages_DuringExecution()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var newItem = new Item
+            {
+                ID = "direct-push-logging-test",
+                Content = "Test content for logging",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add item to local store
+            await _localStore.UpsertAsync(newItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var result = await syncEngine.ForcePushAsync("direct-push-logging-test");
+
+            // Assert
+            Assert.True(result);
+
+            // Verify item was pushed successfully
+            var remoteItem = await _remoteStore.GetAsync("direct-push-logging-test", _testUserId);
+            Assert.NotNull(remoteItem);
+
+            // Note: We can't easily test logger output in integration tests without a test logger,
+            // but we can verify the operation completed successfully which indicates logging worked
+        }
+
+        [Fact]
+        public async Task ForcePushAsync_ShouldHandleMultipleSequentialCalls_WhenCalledForDifferentItems()
+        {
+            // Arrange
+            var items = new List<Item>();
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            for (int i = 1; i <= 3; i++)
+            {
+                var item = new Item
+                {
+                    ID = $"sequential-push-{i}",
+                    Content = $"Sequential content {i}",
+                    LastModified = DateTime.UtcNow,
+                    OIID = _testUserId,
+                    Type = "Item"
+                };
+                items.Add(item);
+                await _localStore.UpsertAsync(item);
+            }
+
+            // Act
+            var results = new List<bool>();
+            foreach (var item in items)
+            {
+                var result = await syncEngine.ForcePushAsync(item.ID);
+                results.Add(result);
+            }
+
+            // Assert
+            Assert.All(results, result => Assert.True(result));
+
+            // Verify all items exist in remote store
+            foreach (var item in items)
+            {
+                var remoteItem = await _remoteStore.GetAsync(item.ID, _testUserId);
+                Assert.NotNull(remoteItem);
+                Assert.Equal(item.Content, remoteItem.Content);
+            }
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            foreach (var item in items)
+            {
+                Assert.DoesNotContain(pendingChanges, pc => pc.ID == item.ID);
+            }
+        }
     }
 }

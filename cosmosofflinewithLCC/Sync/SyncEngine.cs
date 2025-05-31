@@ -311,6 +311,63 @@ namespace cosmosofflinewithLCC.Sync
             }
 
             return itemsPulled;
+        }        /// <summary>
+                 /// Pushes a single new item directly to remote without checking for conflicts.
+                 /// Use this for items with GUID IDs that are guaranteed to be new.
+                 /// </summary>
+                 /// <param name="id">The ID of the item to push to remote</param>
+                 /// <returns>True if the item was successfully pushed, false if not found in local store</returns>
+        public async Task<bool> ForcePushAsync(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                throw new ArgumentException("ID must be provided", nameof(id));
+            }
+
+            _logger.LogInformation("Starting direct push of item {Id} for type {Type} and user {UserId}", id, typeof(TDocument).Name, _userId);
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                // Get the specific item from local store
+                var localItem = await _local.GetAsync(id, _userId);
+                if (localItem == null)
+                {
+                    _logger.LogWarning("Item with ID {Id} not found in local store", id);
+                    return false;
+                }
+
+                // Get or infer the document type
+                string docType = typeof(TDocument).Name;
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
+                {
+                    var currentTypeValue = typeProp.GetValue(localItem)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
+                    {
+                        docType = currentTypeValue;
+                    }
+                }
+                EnsureCommonProperties(localItem, _userId, docType); _logger.LogInformation("Pushing new item with Id {Id} directly to remote", id);
+
+                // Push single item to remote
+                await _remote.UpsertAsync(localItem);
+                _logger.LogInformation("Successfully pushed item {Id} to remote store", id);
+
+                // Remove from pending changes if it exists there
+                await _local.RemovePendingChangeAsync(id);
+
+                stopwatch.Stop();
+                _logger.LogInformation("Direct push completed in {ElapsedMilliseconds}ms for item {Id}",
+                    stopwatch.ElapsedMilliseconds, id);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred during direct push of item {Id}: {Message}", id, ex.Message);
+                throw;
+            }
         }
 
         private static void EnsureCommonProperties(TDocument document, string userId, string docType)
@@ -332,6 +389,11 @@ namespace cosmosofflinewithLCC.Sync
             {
                 typeProp.SetValue(document, docType);
             }
+            else
+            {
+                throw new InvalidOperationException($"Type {typeof(TDocument).Name} must have writable Type property");
+            }
+
         }
 
         private static string GetPropertyName<TProperty>(Expression<Func<TDocument, TProperty>> propertyExpression)
