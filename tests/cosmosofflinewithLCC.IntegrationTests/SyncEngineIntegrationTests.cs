@@ -895,7 +895,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         }
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldPushItemToRemote_WhenItemExistsInLocal()
+        public async Task ForcePushAsync_ShouldPushItemToRemote_WhenItemExistsInLocal()
         {
             // Arrange
             var now = DateTime.UtcNow;
@@ -916,7 +916,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            var result = await syncEngine.PushNewItemDirectlyAsync(itemId);
+            var result = await syncEngine.ForcePushAsync(itemId);
 
             // Assert
             Assert.True(result);
@@ -935,7 +935,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         }
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldReturnFalse_WhenItemDoesNotExistInLocal()
+        public async Task ForcePushAsync_ShouldReturnFalse_WhenItemDoesNotExistInLocal()
         {
             // Arrange
             var nonExistentId = Guid.NewGuid().ToString();
@@ -943,7 +943,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act
-            var result = await syncEngine.PushNewItemDirectlyAsync(nonExistentId);
+            var result = await syncEngine.ForcePushAsync(nonExistentId);
 
             // Assert
             Assert.False(result);
@@ -954,18 +954,18 @@ namespace cosmosofflinewithLCC.IntegrationTests
         }
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldThrowArgumentException_WhenIdIsNullOrEmpty()
+        public async Task ForcePushAsync_ShouldThrowArgumentException_WhenIdIsNullOrEmpty()
         {
             // Arrange
             var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
                 x => x.ID, x => x.LastModified, _testUserId);            // Act & Assert
-            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.PushNewItemDirectlyAsync(null!));
-            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.PushNewItemDirectlyAsync(""));
-            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.PushNewItemDirectlyAsync("   "));
+            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.ForcePushAsync(null!));
+            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.ForcePushAsync(""));
+            await Assert.ThrowsAsync<ArgumentException>(() => syncEngine.ForcePushAsync("   "));
         }
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldNotCheckRemoteForConflicts_UnlikeRegularSync()
+        public async Task ForcePushAsync_ShouldNotCheckRemoteForConflicts_UnlikeRegularSync()
         {
             // Arrange
             var now = DateTime.UtcNow;
@@ -998,7 +998,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act - Push directly (should ignore remote version)
-            var result = await syncEngine.PushNewItemDirectlyAsync(itemId);
+            var result = await syncEngine.ForcePushAsync(itemId);
 
             // Assert
             Assert.True(result);
@@ -1012,7 +1012,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldHandleGuidIds_WithoutConflicts()
+        public async Task ForcePushAsync_ShouldHandleGuidIds_WithoutConflicts()
         {
             // Arrange - This test simulates the primary use case with GUID IDs
             var guidId1 = Guid.NewGuid().ToString();
@@ -1035,8 +1035,8 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, _testUserId);
 
             // Act - Push each item directly
-            var result1 = await syncEngine.PushNewItemDirectlyAsync(guidId1);
-            var result2 = await syncEngine.PushNewItemDirectlyAsync(guidId2);
+            var result1 = await syncEngine.ForcePushAsync(guidId1);
+            var result2 = await syncEngine.ForcePushAsync(guidId2);
 
             // Assert
             Assert.True(result1);
@@ -1057,7 +1057,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         }
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldBeFasterThanRegularSync_ForSingleItem()
+        public async Task ForcePushAsync_ShouldBeFasterThanRegularSync_ForSingleItem()
         {
             // Arrange
             var itemId = Guid.NewGuid().ToString();
@@ -1078,7 +1078,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             // Act & Measure - Direct push
             var stopwatch1 = System.Diagnostics.Stopwatch.StartNew();
-            var directResult = await syncEngine.PushNewItemDirectlyAsync(itemId);
+            var directResult = await syncEngine.ForcePushAsync(itemId);
             stopwatch1.Stop();
 
             // Clean up for next test
@@ -1105,7 +1105,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         }
 
         [Fact]
-        public async Task PushNewItemDirectlyAsync_ShouldWorkWithDifferentUserIds_AfterUpdateUserId()
+        public async Task ForcePushAsync_ShouldWorkWithDifferentUserIds_AfterUpdateUserId()
         {
             // Arrange
             var user1 = "testUser1";
@@ -1128,7 +1128,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 x => x.ID, x => x.LastModified, user1);
 
             // Act - Push with original user
-            var result1 = await syncEngine.PushNewItemDirectlyAsync(itemId);
+            var result1 = await syncEngine.ForcePushAsync(itemId);
 
             // Update user ID
             syncEngine.UpdateUserId(user2);
@@ -1145,7 +1145,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
 
             await _localStore.UpsertAsync(itemForUser2);
 
-            var result2 = await syncEngine.PushNewItemDirectlyAsync(itemForUser2.ID);
+            var result2 = await syncEngine.ForcePushAsync(itemForUser2.ID);
 
             // Assert
             Assert.True(result1);

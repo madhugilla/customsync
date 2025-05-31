@@ -317,7 +317,7 @@ namespace cosmosofflinewithLCC.Sync
                  /// </summary>
                  /// <param name="id">The ID of the item to push to remote</param>
                  /// <returns>True if the item was successfully pushed, false if not found in local store</returns>
-        public async Task<bool> PushNewItemDirectlyAsync(string id)
+        public async Task<bool> ForcePushAsync(string id)
         {
             if (string.IsNullOrWhiteSpace(id))
             {
