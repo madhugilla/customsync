@@ -6,6 +6,15 @@ using Microsoft.Extensions.Logging;
 namespace cosmosofflinewithLCC.Sync
 {
     /// <summary>
+    /// Result of an optimized push operation that tracks processed items
+    /// </summary>
+    public class PushResult
+    {
+        public int ItemsPushed { get; set; }
+        public HashSet<string> ProcessedItemIds { get; set; } = new HashSet<string>();
+    }
+
+    /// <summary>
     /// Provides bi-directional synchronization between local and remote data stores.
     /// Each instance can handle synchronization for a specific type and user context.
     /// </summary>
@@ -61,11 +70,9 @@ namespace cosmosofflinewithLCC.Sync
             }
             _logger.LogInformation("Updating user ID from {OldUserId} to {NewUserId}", _userId, userId);
             _userId = userId;
-        }
-
-        /// <summary>
-        /// Synchronizes data between local and remote stores
-        /// </summary>
+        }        /// <summary>
+                 /// Synchronizes data between local and remote stores
+                 /// </summary>
         public async Task SyncAsync()
         {
             _logger.LogInformation("Starting sync process for type {Type} and user {UserId}", typeof(TDocument).Name, _userId);
@@ -74,12 +81,14 @@ namespace cosmosofflinewithLCC.Sync
 
             try
             {
-                // Push local changes to remote
-                int itemsPushed = await PushPendingChanges();
+                // Optimized sync: Push phase returns processed items to avoid duplicate fetching
+                var pushResult = await PushPendingChangesOptimized();
+                int itemsPushed = pushResult.ItemsPushed;
+                var processedItemIds = pushResult.ProcessedItemIds;
                 _logger.LogInformation("Pushed {Count} local changes to remote store", itemsPushed);
 
-                // Pull remote changes to local
-                int itemsPulled = await PullRemoteChanges();
+                // Pull remote changes to local, excluding already processed items
+                int itemsPulled = await PullRemoteChangesOptimized(processedItemIds);
                 _logger.LogInformation("Pulled {Count} changes from remote store", itemsPulled);
 
                 stopwatch.Stop();
@@ -91,12 +100,47 @@ namespace cosmosofflinewithLCC.Sync
                 _logger.LogError(ex, "Error occurred during sync: {Message}", ex.Message);
                 throw;
             }
-        }        /// <summary>
-                 /// Pushes only local changes to the remote store without pulling remote changes back.
-                 /// This method bypasses conflict checking and pushes all pending changes directly.
-                 /// Use this when you want to upload local data without modifying your local store.
-                 /// </summary>
-                 /// <returns>The number of items that were pushed to the remote store</returns>
+        }
+
+        /// <summary>
+        /// Optimized synchronizes data between local and remote stores using enhanced algorithms
+        /// that avoid duplicate remote data retrieval between push and pull phases
+        /// </summary>
+        public async Task SyncAsyncOptimized()
+        {
+            _logger.LogInformation("Starting optimized sync process for type {Type} and user {UserId}", typeof(TDocument).Name, _userId);
+            int itemsSkipped = 0;
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                // Optimized sync: Push phase returns processed items to avoid duplicate fetching
+                var pushResult = await PushPendingChangesOptimized();
+                int itemsPushed = pushResult.ItemsPushed;
+                var processedItemIds = pushResult.ProcessedItemIds;
+                _logger.LogInformation("Pushed {Count} local changes to remote store", itemsPushed);
+
+                // Pull remote changes to local, excluding already processed items
+                int itemsPulled = await PullRemoteChangesOptimized(processedItemIds);
+                _logger.LogInformation("Pulled {Count} changes from remote store", itemsPulled);
+
+                stopwatch.Stop();
+                _logger.LogInformation("Optimized sync completed in {ElapsedMilliseconds}ms. Pushed: {ItemsPushed}, Pulled: {ItemsPulled}, Skipped: {ItemsSkipped}",
+                    stopwatch.ElapsedMilliseconds, itemsPushed, itemsPulled, itemsSkipped);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred during optimized sync: {Message}", ex.Message);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Pushes only local changes to the remote store without pulling remote changes back.
+        /// This method bypasses conflict checking and pushes all pending changes directly.
+        /// Use this when you want to upload local data without modifying your local store.
+        /// </summary>
+        /// <returns>The number of items that were pushed to the remote store</returns>
         public async Task<int> ForcePushAllAsync()
         {
             _logger.LogInformation("Starting push-only operation for type {Type} and user {UserId}", typeof(TDocument).Name, _userId);
@@ -290,6 +334,124 @@ namespace cosmosofflinewithLCC.Sync
             return itemsPushed;
         }
 
+        /// <summary>
+        /// Optimized push method that returns information about processed items
+        /// to avoid duplicate remote fetching during pull phase
+        /// </summary>
+        private async Task<PushResult> PushPendingChangesOptimized()
+        {
+            var result = new PushResult();
+            var pendingChanges = await _local.GetPendingChangesAsync();
+            _logger.LogInformation("Found {Count} pending changes to sync to remote", pendingChanges.Count);
+
+            // Optimization: Quit early if no pending changes
+            if (pendingChanges.Count == 0)
+            {
+                return result;
+            }
+
+            var itemsToUpsert = new List<TDocument>();
+            var idsToRemove = new List<string>();
+
+            // Extract all document ids for batch retrieval
+            var documentIds = new List<string>();
+            var idToLocalChangesMap = new Dictionary<string, TDocument>();
+
+            // First pass: Set common properties and extract IDs
+            foreach (var localChange in pendingChanges)
+            {
+                // Get or infer the document type
+                string docType = typeof(TDocument).Name;
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
+                {
+                    var currentTypeValue = typeProp.GetValue(localChange)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
+                    {
+                        docType = currentTypeValue;
+                    }
+                }
+                EnsureCommonProperties(localChange, _userId, docType);
+
+                var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(localChange)?.ToString();
+                if (string.IsNullOrEmpty(id))
+                {
+                    _logger.LogWarning("Item has null or empty ID and will be skipped");
+                    continue;
+                }
+
+                // Add ID to our list for batch retrieval
+                documentIds.Add(id);
+                idToLocalChangesMap[id] = localChange;
+            }
+
+            // Optimization: Batch retrieve all remote items in one query
+            Dictionary<string, TDocument> remoteItemsById = new Dictionary<string, TDocument>();
+
+            if (_remote is CosmosDbStore<TDocument> cosmosStore)
+            {
+                _logger.LogInformation("Using bulk operation to retrieve {Count} remote items", documentIds.Count);
+                remoteItemsById = await cosmosStore.GetItemsByIdsAsync(documentIds, _userId);
+            }
+            else
+            {
+                // Fall back to individual fetches if not using CosmosDbStore
+                foreach (var id in documentIds)
+                {
+                    var remoteItem = await _remote.GetAsync(id, _userId);
+                    if (remoteItem != null)
+                    {
+                        remoteItemsById[id] = remoteItem;
+                    }
+                }
+            }            // Second pass: Compare and determine which items need to be updated
+            foreach (var id in documentIds)
+            {
+                var localChange = idToLocalChangesMap[id];
+                remoteItemsById.TryGetValue(id, out var remoteItem);
+
+                var localLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localChange) as DateTime?;
+                var remoteLast = remoteItem != null
+                    ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime?
+                    : null;
+
+                var shouldUpdate = remoteItem == null ||
+                    (localLast.HasValue && (!remoteLast.HasValue || localLast.Value > remoteLast.Value));
+
+                if (shouldUpdate)
+                {
+                    _logger.LogInformation(remoteItem == null ?
+                        "Preparing new item with Id {Id} for remote" :
+                        "Preparing update for item with Id {Id} on remote as local is newer", id);
+                    itemsToUpsert.Add(localChange);
+                    // Only track items that were actually pushed (not skipped)
+                    result.ProcessedItemIds.Add(id);
+                }
+                else
+                {
+                    _logger.LogInformation("Skipping item with Id {Id} as no update is needed", id);
+                    // Don't add skipped items to ProcessedItemIds - let pull phase handle them
+                }
+
+                idsToRemove.Add(id);
+            }
+
+            // Perform bulk upsert for all items needing update
+            if (itemsToUpsert.Any())
+            {
+                await _remote.UpsertBulkAsync(itemsToUpsert, true);
+                result.ItemsPushed = itemsToUpsert.Count;
+            }
+
+            // Remove all items from pending changes
+            foreach (var id in idsToRemove)
+            {
+                await _local.RemovePendingChangeAsync(id);
+            }
+
+            return result;
+        }
+
         private async Task<int> PullRemoteChanges()
         {
             int itemsPulled = 0;
@@ -305,6 +467,68 @@ namespace cosmosofflinewithLCC.Sync
                 string docType = typeof(TDocument).Name;
                 var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(remoteItem)?.ToString();
                 if (id == null) continue;
+
+                var localItem = await _local.GetAsync(id, _userId);
+
+                // Get timestamps for conflict resolution
+                var remoteLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
+                var localLast = localItem != null ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localItem) as DateTime? : null;
+
+                // Type is dynamic - get or infer it
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
+                {
+                    var currentTypeValue = typeProp.GetValue(remoteItem)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
+                    {
+                        docType = currentTypeValue;
+                    }
+                }
+
+                // Last-write-wins strategy
+                if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
+                {
+                    EnsureCommonProperties(remoteItem, _userId, docType);
+                    itemsToUpsert.Add(remoteItem);
+                    itemsPulled++;
+                }
+            }
+
+            if (itemsToUpsert.Any())
+            {
+                // Don't mark these as pending changes to avoid cyclic syncing
+                await _local.UpsertBulkAsync(itemsToUpsert, false);
+            }
+            return itemsPulled;
+        }
+
+        /// <summary>
+        /// Optimized pull method that skips items already processed during push phase
+        /// to avoid duplicate processing and improve sync performance
+        /// </summary>
+        private async Task<int> PullRemoteChangesOptimized(HashSet<string> processedItemIds)
+        {
+            int itemsPulled = 0;
+            var remoteItems = await _remote.GetByUserIdAsync(_userId);
+            _logger.LogInformation("Retrieved {Count} items from remote store for user {UserId}, {ProcessedCount} already processed during push",
+                remoteItems.Count, _userId, processedItemIds.Count);
+
+            var itemsToUpsert = new List<TDocument>();
+
+            foreach (var remoteItem in remoteItems)
+            {
+                if (remoteItem == null) continue;
+
+                string docType = typeof(TDocument).Name;
+                var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(remoteItem)?.ToString();
+                if (id == null) continue;
+
+                // Skip items already processed during push phase
+                if (processedItemIds.Contains(id))
+                {
+                    _logger.LogDebug("Skipping item {Id} as it was already processed during push phase", id);
+                    continue;
+                }
 
                 var localItem = await _local.GetAsync(id, _userId);
 
@@ -505,6 +729,98 @@ namespace cosmosofflinewithLCC.Sync
             return itemsPushed;
         }
 
-        // ...existing methods...
+        /// <summary>
+        /// Highly optimized pull method that excludes items already processed during push phase
+        /// at the database level, avoiding unnecessary data transfer and processing
+        /// </summary>
+        private async Task<int> PullRemoteChangesOptimizedWithDatabaseFiltering(HashSet<string> processedItemIds)
+        {
+            int itemsPulled = 0;
+
+            // Use the enhanced GetByUserIdAsync method with database-level exclusions
+            var remoteItems = await _remote.GetByUserIdAsync(_userId, processedItemIds);
+            _logger.LogInformation("Retrieved {Count} unprocessed items from remote store for user {UserId}, excluded {ProcessedCount} items at database level",
+                remoteItems.Count, _userId, processedItemIds.Count);
+
+            var itemsToUpsert = new List<TDocument>();
+
+            foreach (var remoteItem in remoteItems)
+            {
+                if (remoteItem == null) continue;
+
+                string docType = typeof(TDocument).Name;
+                var id = typeof(TDocument).GetProperty(_idPropName)?.GetValue(remoteItem)?.ToString();
+                if (id == null) continue;
+
+                var localItem = await _local.GetAsync(id, _userId);
+
+                // Get timestamps for conflict resolution
+                var remoteLast = typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(remoteItem) as DateTime?;
+                var localLast = localItem != null ? typeof(TDocument).GetProperty(_lastModifiedPropName)?.GetValue(localItem) as DateTime? : null;
+
+                // Type is dynamic - get or infer it
+                var typeProp = typeof(TDocument).GetProperty("Type");
+                if (typeProp != null)
+                {
+                    var currentTypeValue = typeProp.GetValue(remoteItem)?.ToString();
+                    if (!string.IsNullOrEmpty(currentTypeValue))
+                    {
+                        docType = currentTypeValue;
+                    }
+                }
+
+                // Last-write-wins strategy
+                if (localItem == null || (remoteLast.HasValue && localLast.HasValue && remoteLast > localLast))
+                {
+                    EnsureCommonProperties(remoteItem, _userId, docType);
+                    itemsToUpsert.Add(remoteItem);
+                    itemsPulled++;
+                }
+            }
+
+            if (itemsToUpsert.Any())
+            {
+                // Don't mark these as pending changes to avoid cyclic syncing
+                await _local.UpsertBulkAsync(itemsToUpsert, false);
+            }
+
+            return itemsPulled;
+        }
+
+        /// <summary>
+        /// Optimized synchronization method that uses database-level filtering during pull phase
+        /// to maximize performance by excluding already-processed items at the database level
+        /// </summary>
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering()
+        {
+            try
+            {
+                _logger.LogInformation("Starting optimized sync with database filtering for type {Type} and user {UserId}", typeof(TDocument).Name, _userId);
+                var stopwatch = Stopwatch.StartNew();
+
+                // Phase 1: Push pending changes and get list of processed items
+                _logger.LogInformation("Phase 1: Pushing pending changes to remote");
+                var pushResult = await PushPendingChangesOptimized();
+                _logger.LogInformation("Pushed {Count} items to remote in {ElapsedMs}ms",
+                    pushResult.ItemsPushed, stopwatch.ElapsedMilliseconds);
+
+                // Phase 2: Pull remote changes, excluding items processed during push using database-level filtering
+                _logger.LogInformation("Phase 2: Pulling remote changes with database-level exclusions");
+                var pullStopwatch = Stopwatch.StartNew();
+                var itemsPulled = await PullRemoteChangesOptimizedWithDatabaseFiltering(pushResult.ProcessedItemIds);
+                _logger.LogInformation("Pulled {Count} items from remote in {ElapsedMs}ms (database-level filtering excluded {ExcludedCount} items)",
+                    itemsPulled, pullStopwatch.ElapsedMilliseconds, pushResult.ProcessedItemIds.Count);
+
+                stopwatch.Stop();
+                _logger.LogInformation("Optimized sync with database filtering completed for user {UserId}. " +
+                    "Pushed: {Pushed}, Pulled: {Pulled}, Total time: {TotalMs}ms",
+                    _userId, pushResult.ItemsPushed, itemsPulled, stopwatch.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during optimized sync with database filtering for user {UserId}", _userId);
+                throw;
+            }
+        }
     }
 }

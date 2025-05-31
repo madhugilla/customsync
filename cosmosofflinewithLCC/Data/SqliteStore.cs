@@ -275,6 +275,62 @@ namespace cosmosofflinewithLCC.Data
         }
 
         /// <summary>
+        /// Gets all documents for a specific user, excluding specified IDs
+        /// </summary>
+        /// <param name="userId">The user ID to filter by</param>
+        /// <param name="excludeIds">Optional set of IDs to exclude from results</param>
+        /// <returns>A list of documents belonging to the specified user, excluding the specified IDs</returns>
+        public async Task<List<T>> GetByUserIdAsync(string userId, HashSet<string>? excludeIds)
+        {
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new ArgumentException("userId must not be null or empty", nameof(userId));
+            }
+
+            var items = new List<T>();
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var cmd = connection.CreateCommand();
+
+            if (excludeIds == null || excludeIds.Count == 0)
+            {
+                // No exclusions - use simple user filter
+                cmd.CommandText = $@"SELECT Content FROM [{_tableName}] 
+                                   WHERE json_extract(Content, '$.oiid') = @userId 
+                                   OR json_extract(Content, '$.OIID') = @userId";
+                cmd.Parameters.AddWithValue("@userId", userId);
+            }
+            else
+            {
+                // Use NOT IN query to exclude specific IDs at database level
+                var excludeList = excludeIds.ToList();
+                var parameterNames = excludeList.Select((_, index) => $"@excludeId{index}").ToList();
+                var notInClause = string.Join(", ", parameterNames); cmd.CommandText = $@"SELECT Content FROM [{_tableName}] 
+                                   WHERE (json_extract(Content, '$.oiid') = @userId 
+                                          OR json_extract(Content, '$.OIID') = @userId)
+                                   AND json_extract(Content, '$.id') NOT IN ({notInClause})";
+
+                cmd.Parameters.AddWithValue("@userId", userId);
+
+                // Add all exclude IDs as parameters
+                for (int i = 0; i < excludeList.Count; i++)
+                {
+                    cmd.Parameters.AddWithValue($"@excludeId{i}", excludeList[i]);
+                }
+            }
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var json = reader.GetString(0);
+                items.Add(System.Text.Json.JsonSerializer.Deserialize<T>(json)!);
+            }
+
+            return items;
+        }
+
+        /// <summary>
         /// Gets all pending changes for a specific user
         /// </summary>
         /// <param name="userId">The user ID to filter by</param>

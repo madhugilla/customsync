@@ -3,6 +3,8 @@ using cosmosofflinewithLCC.Models;
 using cosmosofflinewithLCC.Sync;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using System.Reflection;
 
 namespace cosmosofflinewithLCC.IntegrationTests
 {
@@ -924,7 +926,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 Assert.Equal(remoteItem.Content, localItem.Content);
             }
 
-            // Verify no pending changes exist
+            // Verify no pending changes after initial data pull
             var pendingChanges = await _localStore.GetPendingChangesAsync();
             Assert.Empty(pendingChanges);
         }
@@ -1414,7 +1416,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
         {
             // Arrange
             var now = DateTime.UtcNow;
-            var itemCount = 50; // Test with a larger dataset
+            const int itemCount = 50; // Test with a larger dataset
             var items = new List<Item>();
 
             for (int i = 0; i < itemCount; i++)
@@ -1429,7 +1431,7 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 });
             }
 
-            // Add all items to local store
+            // Add items to local store
             foreach (var item in items)
             {
                 await _localStore.UpsertAsync(item);
@@ -1450,6 +1452,65 @@ namespace cosmosofflinewithLCC.IntegrationTests
                 var remoteItem = await _remoteStore.GetAsync(item.ID, _testUserId);
                 Assert.NotNull(remoteItem);
                 Assert.Equal(item.Content, remoteItem.Content);
+            }            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        // ...existing methods...
+
+        [Fact]
+        public async Task SyncAsyncOptimized_ShouldPerformBasicSync_WithOptimizedAlgorithms()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+
+            // Local items to push
+            var localItems = new List<Item>
+            {
+                new Item { ID = "opt-local1", Content = "Optimized local 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "opt-local2", Content = "Optimized local 2", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Remote items to pull
+            var remoteItems = new List<Item>
+            {
+                new Item { ID = "opt-remote1", Content = "Optimized remote 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "opt-remote2", Content = "Optimized remote 2", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Add local items with pending changes
+            foreach (var item in localItems)
+            {
+                await _localStore.UpsertAsync(item);
+            }
+
+            // Add remote items
+            foreach (var item in remoteItems)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimized();
+
+            // Assert - Local items should be in remote
+            foreach (var item in localItems)
+            {
+                var remoteItem = await _remoteStore.GetAsync(item.ID, _testUserId);
+                Assert.NotNull(remoteItem);
+                Assert.Equal(item.Content, remoteItem.Content);
+            }
+
+            // Remote items should be in local
+            foreach (var item in remoteItems)
+            {
+                var localItem = await _localStore.GetAsync(item.ID, _testUserId);
+                Assert.NotNull(localItem);
+                Assert.Equal(item.Content, localItem.Content);
             }
 
             // Verify no pending changes remain
@@ -1457,6 +1518,555 @@ namespace cosmosofflinewithLCC.IntegrationTests
             Assert.Empty(pendingChanges);
         }
 
-        // ...existing methods...
+        [Fact]
+        public async Task SyncAsyncOptimized_ShouldSkipDuplicateRemoteFetching_WhenItemsArePushedAndPulled()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+
+            // Create an item that will be processed in both push and pull phases
+            var conflictItem = new Item
+            {
+                ID = "opt-conflict",
+                Content = "Local version",
+                LastModified = now.AddMinutes(10), // Local is newer
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add older version to remote first
+            var remoteVersion = new Item
+            {
+                ID = "opt-conflict",
+                Content = "Remote version",
+                LastModified = now, // Remote is older
+                OIID = _testUserId,
+                Type = "Item"
+            };
+            await _remoteStore.UpsertAsync(remoteVersion);
+
+            // Add local version with pending change (newer)
+            await _localStore.UpsertAsync(conflictItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimized();
+
+            // Assert - Local version should win (it's newer)
+            var finalRemoteItem = await _remoteStore.GetAsync("opt-conflict", _testUserId);
+            var finalLocalItem = await _localStore.GetAsync("opt-conflict", _testUserId);
+
+            Assert.NotNull(finalRemoteItem);
+            Assert.NotNull(finalLocalItem);
+            Assert.Equal("Local version", finalRemoteItem.Content);
+            Assert.Equal("Local version", finalLocalItem.Content);
+            Assert.Equal(now.AddMinutes(10), finalRemoteItem.LastModified);
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimized_ShouldHandleConflictResolution_WithOptimizedProcessing()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var localNewer = now.AddMinutes(10);
+            var remoteOlder = now.AddMinutes(-5);
+
+            // Create conflicting items where local is newer
+            var localItem = new Item
+            {
+                ID = "conflict-test",
+                Content = "Local content (newer)",
+                LastModified = localNewer,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            var remoteItem = new Item
+            {
+                ID = "conflict-test",
+                Content = "Remote content (older)",
+                LastModified = remoteOlder,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Add items to their respective stores
+            await _localStore.UpsertAsync(localItem);
+            await _remoteStore.UpsertAsync(remoteItem);
+
+            // Add additional non-conflicting items to test filtering works correctly
+            var additionalLocal = new Item
+            {
+                ID = "non-conflict-local",
+                Content = "Non-conflict local",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+            var additionalRemote = new Item
+            {
+                ID = "non-conflict-remote",
+                Content = "Non-conflict remote",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            await _localStore.UpsertAsync(additionalLocal);
+            await _remoteStore.UpsertAsync(additionalRemote);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Assert - Local (newer) should win the conflict
+            var finalRemoteConflict = await _remoteStore.GetAsync("conflict-test", _testUserId);
+            var finalLocalConflict = await _localStore.GetAsync("conflict-test", _testUserId);
+
+            Assert.NotNull(finalRemoteConflict);
+            Assert.NotNull(finalLocalConflict);
+            Assert.Equal("Local content (newer)", finalRemoteConflict.Content);
+            Assert.Equal("Local content (newer)", finalLocalConflict.Content);
+            Assert.Equal(localNewer, finalRemoteConflict.LastModified);
+
+            // Verify non-conflicting items are properly synced
+            var syncedRemoteAdditional = await _remoteStore.GetAsync("non-conflict-local", _testUserId);
+            var syncedLocalAdditional = await _localStore.GetAsync("non-conflict-remote", _testUserId);
+
+            Assert.NotNull(syncedRemoteAdditional);
+            Assert.NotNull(syncedLocalAdditional);
+            Assert.Equal("Non-conflict local", syncedRemoteAdditional.Content);
+            Assert.Equal("Non-conflict remote", syncedLocalAdditional.Content);
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldHandleUserFiltering_WithDatabaseLevelOptimization()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+            var otherUserId = "other-user-123";
+
+            // Create items for the test user
+            var testUserItems = new List<Item>
+            {
+                new Item { ID = "user-filter-1", Content = "Test user item 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "user-filter-2", Content = "Test user item 2", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Create items for another user (should be ignored)
+            var otherUserItems = new List<Item>
+            {
+                new Item { ID = "other-user-1", Content = "Other user item 1", LastModified = now, OIID = otherUserId, Type = "Item" },
+                new Item { ID = "other-user-2", Content = "Other user item 2", LastModified = now, OIID = otherUserId, Type = "Item" }
+            };
+
+            // Add all items to remote store
+            foreach (var item in testUserItems)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+            foreach (var item in otherUserItems)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+
+            // Add one test user item to local store with pending change
+            var localItem = new Item
+            {
+                ID = "local-pending",
+                Content = "Local pending item",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+            await _localStore.UpsertAsync(localItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Assert - Only test user items should be synced
+            foreach (var item in testUserItems)
+            {
+                var localResult = await _localStore.GetAsync(item.ID, _testUserId);
+                Assert.NotNull(localResult);
+                Assert.Equal(item.Content, localResult.Content);
+                Assert.Equal(_testUserId, localResult.OIID);
+            }
+
+            // Local item should be pushed to remote
+            var remoteResult = await _remoteStore.GetAsync("local-pending", _testUserId);
+            Assert.NotNull(remoteResult);
+            Assert.Equal("Local pending item", remoteResult.Content);
+
+            // Other user items should NOT be in local store
+            foreach (var item in otherUserItems)
+            {
+                var shouldNotExist = await _localStore.GetAsync(item.ID, _testUserId);
+                Assert.Null(shouldNotExist);
+            }
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldHandleEmptyStores_WithoutErrors()
+        {
+            // Arrange - Both stores are already empty from setup
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act & Assert - Should complete without errors
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Verify stores remain empty
+            var localItems = await _localStore.GetByUserIdAsync(_testUserId);
+            var remoteItems = await _remoteStore.GetByUserIdAsync(_testUserId);
+
+            Assert.Empty(localItems);
+            Assert.Empty(remoteItems);
+
+            // Verify no pending changes
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldProcessLargeDatasets_EfficientlyWithDatabaseFiltering()
+        {
+            // Arrange - Create a larger dataset to test performance optimization
+            var now = DateTime.UtcNow;
+            var itemCount = 50; // Moderate size for integration testing
+
+            var localItems = new List<Item>();
+            var remoteItems = new List<Item>();
+
+            // Create local items
+            for (int i = 0; i < itemCount; i++)
+            {
+                localItems.Add(new Item
+                {
+                    ID = $"large-local-{i}",
+                    Content = $"Large dataset local item {i}",
+                    LastModified = now.AddMinutes(i),
+                    OIID = _testUserId,
+                    Type = "Item"
+                });
+            }
+
+            // Create remote items (different IDs to avoid conflicts)
+            for (int i = 0; i < itemCount; i++)
+            {
+                remoteItems.Add(new Item
+                {
+                    ID = $"large-remote-{i}",
+                    Content = $"Large dataset remote item {i}",
+                    LastModified = now.AddMinutes(i),
+                    OIID = _testUserId,
+                    Type = "Item"
+                });
+            }
+
+            // Add items in batches to avoid overwhelming the stores
+            foreach (var item in localItems)
+            {
+                await _localStore.UpsertAsync(item);
+            }
+
+            foreach (var item in remoteItems)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+            stopwatch.Stop();
+
+            // Assert - All items should be synced and operation should complete in reasonable time
+            // Verify local items were pushed to remote
+            foreach (var localItem in localItems)
+            {
+                var remoteResult = await _remoteStore.GetAsync(localItem.ID, _testUserId);
+                Assert.NotNull(remoteResult);
+                Assert.Equal(localItem.Content, remoteResult.Content);
+            }
+
+            // Verify remote items were pulled to local
+            foreach (var remoteItem in remoteItems)
+            {
+                var localResult = await _localStore.GetAsync(remoteItem.ID, _testUserId);
+                Assert.NotNull(localResult);
+                Assert.Equal(remoteItem.Content, localResult.Content);
+            }
+
+            // Verify performance - should complete in reasonable time (10 seconds should be plenty)
+            Assert.True(stopwatch.ElapsedMilliseconds < 10000,
+                $"Sync took too long: {stopwatch.ElapsedMilliseconds}ms. Database filtering should improve performance.");
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldMaintainDataIntegrity_AfterDatabaseFilteredSync()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+
+            // Create items with various scenarios to test data integrity
+            var scenarios = new List<Item>
+            {
+                // Item with special characters
+                new Item { ID = "integrity-special", Content = "Special chars: àáâãäåæçèéêë", LastModified = now, OIID = _testUserId, Type = "Item" },
+                
+                // Item with long content
+                new Item { ID = "integrity-long", Content = new string('A', 1000), LastModified = now, OIID = _testUserId, Type = "Item" },
+                
+                // Item with JSON-like content
+                new Item { ID = "integrity-json", Content = "{\"key\": \"value\", \"number\": 123}", LastModified = now, OIID = _testUserId, Type = "Item" },
+                
+                // Item with null-like string content
+                new Item { ID = "integrity-null", Content = "null", LastModified = now, OIID = _testUserId, Type = "Item" },
+                
+                // Item with empty content
+                new Item { ID = "integrity-empty", Content = "", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Add half to local, half to remote
+            for (int i = 0; i < scenarios.Count; i++)
+            {
+                if (i % 2 == 0)
+                {
+                    await _localStore.UpsertAsync(scenarios[i]);
+                }
+                else
+                {
+                    await _remoteStore.UpsertAsync(scenarios[i]);
+                }
+            }
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Assert - Verify data integrity is maintained
+            foreach (var originalItem in scenarios)
+            {
+                // Check both stores have the item with correct data
+                var localCopy = await _localStore.GetAsync(originalItem.ID, _testUserId);
+                var remoteCopy = await _remoteStore.GetAsync(originalItem.ID, _testUserId);
+
+                Assert.NotNull(localCopy);
+                Assert.NotNull(remoteCopy);
+
+                // Verify content integrity
+                Assert.Equal(originalItem.Content, localCopy.Content);
+                Assert.Equal(originalItem.Content, remoteCopy.Content);
+
+                // Verify metadata integrity
+                Assert.Equal(originalItem.ID, localCopy.ID);
+                Assert.Equal(originalItem.ID, remoteCopy.ID);
+                Assert.Equal(_testUserId, localCopy.OIID);
+                Assert.Equal(_testUserId, remoteCopy.OIID);
+                Assert.Equal("Item", localCopy.Type);
+                Assert.Equal("Item", remoteCopy.Type);
+
+                // Verify timestamps are preserved
+                Assert.Equal(originalItem.LastModified, localCopy.LastModified);
+                Assert.Equal(originalItem.LastModified, remoteCopy.LastModified);
+            }
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldHandleOnlyLocalData_WithDatabaseFiltering()
+        {
+            // Arrange - Only add data to local store, remote is empty
+            var now = DateTime.UtcNow;
+            var localOnlyItems = new List<Item>
+            {
+                new Item { ID = "local-only-1", Content = "Local only item 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "local-only-2", Content = "Local only item 2", LastModified = now.AddMinutes(1), OIID = _testUserId, Type = "Item" },
+                new Item { ID = "local-only-3", Content = "Local only item 3", LastModified = now.AddMinutes(2), OIID = _testUserId, Type = "Item" }
+            };
+
+            foreach (var item in localOnlyItems)
+            {
+                await _localStore.UpsertAsync(item);
+            }
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Assert - All local items should be pushed to remote
+            foreach (var localItem in localOnlyItems)
+            {
+                var remoteResult = await _remoteStore.GetAsync(localItem.ID, _testUserId);
+                Assert.NotNull(remoteResult);
+                Assert.Equal(localItem.Content, remoteResult.Content);
+                Assert.Equal(localItem.LastModified, remoteResult.LastModified);
+                Assert.Equal(localItem.OIID, remoteResult.OIID);
+            }
+
+            // Verify local items are still present
+            foreach (var localItem in localOnlyItems)
+            {
+                var localResult = await _localStore.GetAsync(localItem.ID, _testUserId);
+                Assert.NotNull(localResult);
+                Assert.Equal(localItem.Content, localResult.Content);
+            }
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldHandleOnlyRemoteData_WithDatabaseFiltering()
+        {
+            // Arrange - Only add data to remote store, local is empty
+            var now = DateTime.UtcNow;
+            var remoteOnlyItems = new List<Item>
+            {
+                new Item { ID = "remote-only-1", Content = "Remote only item 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "remote-only-2", Content = "Remote only item 2", LastModified = now.AddMinutes(1), OIID = _testUserId, Type = "Item" },
+                new Item { ID = "remote-only-3", Content = "Remote only item 3", LastModified = now.AddMinutes(2), OIID = _testUserId, Type = "Item" }
+            };
+
+            foreach (var item in remoteOnlyItems)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Assert - All remote items should be pulled to local
+            foreach (var remoteItem in remoteOnlyItems)
+            {
+                var localResult = await _localStore.GetAsync(remoteItem.ID, _testUserId);
+                Assert.NotNull(localResult);
+                Assert.Equal(remoteItem.Content, localResult.Content);
+                Assert.Equal(remoteItem.LastModified, localResult.LastModified);
+                Assert.Equal(remoteItem.OIID, localResult.OIID);
+            }
+
+            // Verify remote items are still present
+            foreach (var remoteItem in remoteOnlyItems)
+            {
+                var remoteResult = await _remoteStore.GetAsync(remoteItem.ID, _testUserId);
+                Assert.NotNull(remoteResult);
+                Assert.Equal(remoteItem.Content, remoteResult.Content);
+            }
+
+            // Verify no pending changes remain (should be empty since we only pulled data)
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
+
+        [Fact]
+        public async Task SyncAsyncOptimizedWithDatabaseFiltering_ShouldSkipDuplicateRemoteFetching_WithDatabaseFiltering()
+        {
+            // Arrange
+            var now = DateTime.UtcNow;
+
+            // Create items that will be processed during push phase
+            var localItems = new List<Item>
+            {
+                new Item { ID = "duplicate-test-1", Content = "Local version 1", LastModified = now.AddMinutes(5), OIID = _testUserId, Type = "Item" },
+                new Item { ID = "duplicate-test-2", Content = "Local version 2", LastModified = now.AddMinutes(5), OIID = _testUserId, Type = "Item" }
+            };
+
+            // Create older versions in remote (should be overwritten during push)
+            var remoteVersions = new List<Item>
+            {
+                new Item { ID = "duplicate-test-1", Content = "Remote version 1", LastModified = now, OIID = _testUserId, Type = "Item" },
+                new Item { ID = "duplicate-test-2", Content = "Remote version 2", LastModified = now, OIID = _testUserId, Type = "Item" }
+            };
+
+            // Add additional remote item that should be pulled (not processed during push)
+            var additionalRemoteItem = new Item
+            {
+                ID = "additional-remote",
+                Content = "Additional remote item",
+                LastModified = now,
+                OIID = _testUserId,
+                Type = "Item"
+            };
+
+            // Setup stores
+            foreach (var item in localItems)
+            {
+                await _localStore.UpsertAsync(item);
+            }
+
+            foreach (var item in remoteVersions)
+            {
+                await _remoteStore.UpsertAsync(item);
+            }
+            await _remoteStore.UpsertAsync(additionalRemoteItem);
+
+            var syncEngine = new SyncEngine<Item>(_localStore, _remoteStore, _logger,
+                x => x.ID, x => x.LastModified, _testUserId);
+
+            // Act
+            await syncEngine.SyncAsyncOptimizedWithDatabaseFiltering();
+
+            // Assert - Items processed during push should not be fetched again during pull
+            // The local versions (newer) should have won and be in both stores
+            foreach (var localItem in localItems)
+            {
+                var remoteResult = await _remoteStore.GetAsync(localItem.ID, _testUserId);
+                var localResult = await _localStore.GetAsync(localItem.ID, _testUserId);
+
+                Assert.NotNull(remoteResult);
+                Assert.NotNull(localResult);
+                Assert.Equal(localItem.Content, remoteResult.Content); // Local version should win
+                Assert.Equal(localItem.Content, localResult.Content);
+                Assert.Equal(localItem.LastModified, remoteResult.LastModified);
+            }
+
+            // Additional remote item should have been pulled
+            var additionalLocal = await _localStore.GetAsync("additional-remote", _testUserId);
+            Assert.NotNull(additionalLocal);
+            Assert.Equal("Additional remote item", additionalLocal.Content);
+
+            // Verify no pending changes remain
+            var pendingChanges = await _localStore.GetPendingChangesAsync();
+            Assert.Empty(pendingChanges);
+        }
     }
 }

@@ -71,6 +71,11 @@ namespace cosmosofflinewithLCC.Data
 
         public async Task<List<T>> GetByUserIdAsync(string userId)
         {
+            return await GetByUserIdAsync(userId, null);
+        }
+
+        public async Task<List<T>> GetByUserIdAsync(string userId, HashSet<string>? excludeIds)
+        {
             var results = new List<T>();
 
             // Create instance with userId and type to generate partition key
@@ -81,22 +86,45 @@ namespace cosmosofflinewithLCC.Data
             var partitionKeyProp = typeof(T).GetProperty("PartitionKey") ??
                 throw new InvalidOperationException($"Type {typeof(T).Name} must have PartitionKey property");
 
-            // The 'partitionKey' string's format, including any colons (e.g., "userId:Type"),
-            // is determined by the implementation of the 'PartitionKey' property getter in the model class T.
-            // This store assumes the model's PartitionKey property correctly combines OIID and Type.
             string partitionKey = partitionKeyProp.GetValue(instance)?.ToString() ??
                 throw new InvalidOperationException("PartitionKey cannot be null or empty after setting OIID and Type.");
 
-            // Using QueryRequestOptions with PartitionKey - This instructs Cosmos DB to query only within the specified partition
-            // This is equivalent to "SELECT * FROM c" restricted to the given partition
-            var query = _container.GetItemQueryIterator<T>(
-                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(partitionKey) }
-            );
-
-            while (query.HasMoreResults)
+            if (excludeIds == null || excludeIds.Count == 0)
             {
-                var response = await query.ReadNextAsync();
-                results.AddRange(response);
+                // No exclusions - use simple partition query
+                var query = _container.GetItemQueryIterator<T>(
+                    requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(partitionKey) }
+                );
+
+                while (query.HasMoreResults)
+                {
+                    var response = await query.ReadNextAsync();
+                    results.AddRange(response);
+                }
+            }
+            else
+            {
+                // Use NOT IN query to exclude specific IDs at database level
+                var excludeList = excludeIds.ToList();
+                var parameterNames = excludeList.Select((_, index) => $"@excludeId{index}").ToList();
+                var queryText = $"SELECT * FROM c WHERE c.partitionKey = @partitionKey AND c.id NOT IN ({string.Join(", ", parameterNames)})";
+
+                var queryDefinition = new QueryDefinition(queryText)
+                    .WithParameter("@partitionKey", partitionKey);
+
+                // Add all exclude IDs as parameters
+                for (int i = 0; i < excludeList.Count; i++)
+                {
+                    queryDefinition = queryDefinition.WithParameter($"@excludeId{i}", excludeList[i]);
+                }
+
+                var query = _container.GetItemQueryIterator<T>(queryDefinition);
+
+                while (query.HasMoreResults)
+                {
+                    var response = await query.ReadNextAsync();
+                    results.AddRange(response);
+                }
             }
 
             return results;
