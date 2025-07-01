@@ -34,6 +34,7 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CODEX_PARALLEL_TOOL_CALLS: '0'
+          CODEX_QUIET_MODE: '1'
         run: |
           INSTRUCTION="$ISSUE_TITLE  --- $ISSUE_BODY"
           
@@ -43,7 +44,7 @@ jobs:
           export OPENAI_BASE_URL=https://models.github.ai/inference
 
           # any provider string would work here, it's just so codex knows it's using a custom model
-          codex --approval-mode full-auto --provider github --model openai/gpt-4.1 "$INSTRUCTION"
+          codex --approval-mode full-auto --provider github --model openai/gpt-4.1 --quiet --no-terminal "$INSTRUCTION"
           
           if [[ -n $(git status --porcelain) ]]; then
             git config user.name "GitHub Models Codex Bot"
